@@ -48,3 +48,4 @@ test-suite theseus-test
         theseus,
         hspec,
         temporary,
+        QuickCheck,
