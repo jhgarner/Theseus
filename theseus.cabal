@@ -1,0 +1,50 @@
+cabal-version:      3.12
+name:               theseus
+version:            0.1.0.0
+-- synopsis:
+-- description:
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Jack
+maintainer:         jacksonhgarner@outlook.com
+-- copyright:
+category:           Control
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common shared
+    default-language: GHC2024
+    ghc-options:
+        -Wall
+        -Wno-partial-type-signatures
+        -Wno-name-shadowing
+    build-depends:
+        base ^>=4.20.0.0,
+        unliftio-core,
+        mtl,
+    default-extensions:
+        BlockArguments
+        DerivingVia
+        RequiredTypeArguments
+        TypeAbstractions
+        UndecidableInstances
+
+library
+    import:           shared
+    exposed-modules:  MyLib
+    -- other-modules:
+    -- other-extensions:
+    hs-source-dirs:   src
+
+test-suite theseus-test
+    import:           shared
+    -- other-modules:
+    -- other-extensions:
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    build-depends:
+        theseus,
+        hspec,
+        temporary,
