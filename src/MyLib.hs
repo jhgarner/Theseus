@@ -1,6 +1,6 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE QuantifiedConstraints #-}
-module MyLib (Eff, runEff, runEffIO, raise, Reader(Ask, Local), runReader, ask, local, asks, State(Get, Put), evalState, execState, runState, get, put, gets) where
+module MyLib (Eff(Eff), Freer(..), Union(..), inj, runEff, runEffIO, raise, Reader(Ask, Local), runReader, ask, local, asks, State(Get, Put), evalState, execState, runState, get, put, gets, Catch(Catch), Throw(Throw), catch, throw, runCatch, runThrow) where
 
 import Data.Kind
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -35,15 +35,11 @@ raise (Eff (Pure a)) = pure a
 raise (Eff (Impure eff next)) = Eff $ Impure (raiseEff eff) (raise . next)
 
 raiseEff :: Union es esSend x -> Union (eff:es) esSend x
-raiseEff (This eff trans) = That (This eff trans)
+raiseEff (This eff) = That (This eff)
 raiseEff (That rest) = That $ raiseEff rest
 
--- raiseThis :: Union ls es ~> Union ls (eff:es)
--- raiseThis (This eff) = This eff (getEff . raise . Eff . others)
--- raiseThis (That rest) = That $ raiseThis rest
-
 data Union (ls :: [Effect]) (es :: [Effect]) (a :: Type) where
-  This :: eff (Eff es) a -> (eff (Eff es) ~> Union es es) -> Union (eff:ls) es a
+  This :: eff (Eff es) a -> Union (eff:ls) es a
   That :: Union ls es a -> Union (eff:ls) es a
 
 data Reader r m a where
@@ -104,88 +100,60 @@ data Catch m a where
 catch :: Catch `Member` es => Eff (Throw e : es) a -> (e -> Eff es a) -> Eff es a
 catch action onThrow = send $ Catch action onThrow
 
--- runCatch :: Eff (Catch : es) a -> Eff es a
--- runCatch = handle pure \cases
---   (Catch action onThrow) fix next -> runCatch (fix $ handle pure (\(Throw e) _ _ -> onThrow e) $ action) >>= runCatch . next
---   where
---     runThrow :: (e -> Eff es finalA) -> Eff (Throw e : es) finalA -> Eff es finalA
---     runThrow onThrow = handle \cases
---       (Throw e) fix next -> onThrow e
---
--- elabCatch :: s -> Handler (State s) es a (s, a)
--- elabCatch s Get next = runState s $ next $ pure s
--- elabCatch _ (Put s') next = runState s' $ next $ pure ()
+runCatch :: Eff (Catch : es) a -> Eff es a
+runCatch = handle pure elabCatch
 
-data TheThis eff es a where
-  -- TheThis :: eff ogF a -> (ogF ~> f) -> TheThis eff f a
-  TheThis :: eff (Eff es) a -> (eff (Eff es) ~> Union es es) -> TheThis eff es a
+elabCatch :: Handler Catch es a a
+elabCatch (Catch action onThrow) next = runCatch $ next $ runThrow onThrow action
 
-type m ~> n = forall x. m x -> n x
+runThrow :: (e -> Eff es a) -> Eff (Throw e : es) a -> Eff es a
+runThrow onThrow = handle pure $ elabThrow onThrow
+
+elabThrow :: (e -> Eff es a) -> Handler (Throw e) es a a
+elabThrow onThrow (Throw e) _ = onThrow e
 
 class InternalMember eff ls where
-  internalInj :: (eff (Eff es) ~> Union es es) -> eff (Eff es) a -> Union ls es a
-  internalPrj :: Union ls es a -> Maybe (TheThis eff es a)
+  internalInj :: eff (Eff es) a -> Union ls es a
+  internalPrj :: Union ls es a -> Maybe (eff (Eff es) a)
 
 instance InternalMember eff (eff:es) where
-  internalInj injector eff = This eff injector
+  internalInj eff = This eff
 
-  internalPrj (This eff trans) = Just $ TheThis eff trans
+  internalPrj (This eff) = Just eff
   internalPrj (That _) = Nothing
 
 instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other:es) where
-  internalInj injector eff = That $ internalInj injector eff
+  internalInj eff = That $ internalInj eff
 
-  internalPrj (This _ _) = Nothing
+  internalPrj (This _) = Nothing
   internalPrj (That rest) = internalPrj rest
 
 class InternalMember eff es => Member eff es where
   inj :: eff (Eff es) a -> Union es es a
 
-prj :: InternalMember eff ls => Union ls es a -> Maybe (TheThis eff es a)
+prj :: InternalMember eff ls => Union ls es a -> Maybe (eff (Eff es) a)
 prj = internalPrj
 
 instance InternalMember eff es => Member eff es where
-  inj = internalInj inj
+  inj = internalInj
 
--- instance {-# OVERLAPPABLE #-} Member eff es => Member eff (other:es) where
---   inj eff trans = That $ _ $ inj @eff @es eff (_ . trans)
---
---   prj (This _ _) = Nothing
---   prj (That rest) = prj rest
-
-newtype Eff (es :: [Effect]) a = Eff { getEff :: Freer es a}
+newtype Eff (es :: [Effect]) a = Eff (Freer es a)
   deriving (Functor, Applicative, Monad)
 
 send :: eff `Member` es => eff (Eff es) a -> Eff es a
 send eff = Eff $ lift $ inj $ eff
 
--- unEff :: Union ls es a -> Union ls (Freer (Union es)) a
--- unEff (That rest) = That $ unEff rest
--- unEff (This e) = This e (getEff . others)
-
--- effIt :: Union ls (Freer (Union es)) a -> Union ls (Eff es) a
--- effIt (That rest) = That $ effIt rest
--- effIt (This e others) = This e (Eff . others)
-
 type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff:es) a) -> Eff es ans)
 
 handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff:es) a -> Eff es ans
 handle ret _ (Eff (Pure a)) = ret a
-handle _ f (Eff (Impure (This e _) next)) = f e (next)
-handle ret f (Eff (Impure (That rest) next)) = handle ret f $ next $ Eff $ lift $ going $ rest
--- handle ret f (Eff (Impure (That rest) next)) = handle ret f $ next $ Eff $ lift $ That $ _ $ rest
-  -- next justThat
-  -- handle ret f $ Eff $ next justThat
--- handle ret f (Eff (Impure (That rest) next)) = Eff (lift (matchInners ret f rest)) >>= handle ret f . Eff . next
-
-going :: Union ls esSend a -> Union esSend esSend a
-going (This oEff trans) = trans oEff
-going (That rest) = going $ rest
+handle _ f (Eff (Impure (This e) next)) = f e (next)
+handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (handle ret f . next)
 
 interpose :: eff `Member` es => (a -> Eff es ans) -> Handler eff es a ans -> Eff es a -> Eff es ans
 interpose ret _ (Eff (Pure a)) = ret a
 interpose ret f (Eff (Impure union next)) = case prj union of
-  Just (TheThis eff _) -> f eff (raise . next)
+  Just eff -> f eff (raise . next)
   Nothing -> Eff (Impure union (next >=> ret))
 
 runEff :: Eff '[] a -> a
@@ -199,7 +167,7 @@ data EIO m a where
 
 runEffIO :: Eff '[EIO] a -> IO a
 runEffIO (Eff (Pure a)) = pure a
-runEffIO (Eff (Impure (This (LiftIO io) _) next)) = io >>= runEffIO . next . pure
+runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . next . pure
 -- runEffIO (Eff (Impure (This (UnliftIO unlift) _) next)) = _ $ unlift (_) -- >>= runEffIO . next . pure -- (Eff . rest <$> unlift (runEffIO . Eff . others)) >>= runEffIO
 runEffIO (Eff (Impure (That union) _)) = case union of {}
 

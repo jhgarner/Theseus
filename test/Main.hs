@@ -20,6 +20,8 @@ main = hspec do
   describe "Reader" do
     it "must have a working ask method" do
       ("test", "test") === runEff $ runReader "test" do liftA2 (,) ask ask
+    it "Must support multiple stacks" do
+      ("inner", ()) === runEff $ runReader () $ runReader "inner" do liftA2 (,) ask ask
     it "must have a working local method" do
       "test local" === runEff $ runReader "test" do local (++ " local") ask
 
@@ -33,6 +35,21 @@ main = hspec do
         b <- get
         c <- get
         pure $ (a, b, c)
+
+  describe "Catching" do
+    it "Should do nothing if no exceptions are thrown" do
+      "success" === runEff $ runCatch do
+        catch (pure "success") (const $ pure "failure")
+    it "Should catch exceptions" do
+      "failure" === runEff $ runCatch do
+        catch (throw ()) (\() -> pure "failure")
+    describe "State is preserved past a throw" do
+      it "When runCatch happens after runState" do
+        ("s2", "failure") === runEff $ runCatch $ runState "s" do
+          catch (put "s2" *> throw ()) (\() -> pure "failure")
+      it "When runCatch happens before runState" do
+        ("s2", "failure") === runEff $ runState "s" $ runCatch do
+          catch (put "s2" *> throw ()) (\() -> pure "failure")
 
 class Expects a b where
   (===) :: a -> (c -> b) -> c -> Expectation
