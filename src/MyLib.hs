@@ -1,12 +1,40 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE QuantifiedConstraints #-}
-module MyLib (Eff(Eff), Freer(..), Union(..), inj, runEff, runEffIO, raise, Reader(Ask, Local), runReader, ask, local, asks, State(Get, Put), evalState, execState, runState, get, put, gets, Catch(Catch), Throw(Throw), catch, throw, runCatch, runThrow) where
 
-import Data.Kind
+module MyLib (
+  Eff (Eff),
+  Freer (..),
+  Union (..),
+  inj,
+  runEff,
+  runEffIO,
+  raise,
+  runReader,
+  ask,
+  local,
+  asks,
+  State (Get, Put),
+  evalState,
+  execState,
+  runState,
+  get,
+  put,
+  gets,
+  Catch (Catch),
+  Throw (Throw),
+  catch,
+  throw,
+  runCatch,
+  runThrow,
+) where
+
 import Control.Monad.IO.Class (MonadIO (liftIO))
--- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
-import Control.Monad ((>=>))
+import Data.Kind
 
+-- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
+
+import Control.Effect (Free)
+import Control.Monad ((>=>))
 
 type Effect = (Type -> Type) -> Type -> Type
 
@@ -30,17 +58,17 @@ instance Monad (Freer f) where
 lift :: Union es es a -> Freer es a
 lift f = Impure f id
 
-raise :: Eff es a -> Eff (eff:es) a
+raise :: Eff es a -> Eff (eff : es) a
 raise (Eff (Pure a)) = pure a
 raise (Eff (Impure eff next)) = Eff $ Impure (raiseEff eff) (raise . next)
 
-raiseEff :: Union es esSend x -> Union (eff:es) esSend x
+raiseEff :: Union es esSend x -> Union (eff : es) esSend x
 raiseEff (This eff) = That (This eff)
 raiseEff (That rest) = That $ raiseEff rest
 
 data Union (ls :: [Effect]) (es :: [Effect]) (a :: Type) where
-  This :: eff (Eff es) a -> Union (eff:ls) es a
-  That :: Union ls es a -> Union (eff:ls) es a
+  This :: eff (Eff es) a -> Union (eff : ls) es a
+  That :: Union ls es a -> Union (eff : ls) es a
 
 data Reader r m a where
   Ask :: Reader r m r
@@ -116,13 +144,13 @@ class InternalMember eff ls where
   internalInj :: eff (Eff es) a -> Union ls es a
   internalPrj :: Union ls es a -> Maybe (eff (Eff es) a)
 
-instance InternalMember eff (eff:es) where
+instance InternalMember eff (eff : es) where
   internalInj eff = This eff
 
   internalPrj (This eff) = Just eff
   internalPrj (That _) = Nothing
 
-instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other:es) where
+instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other : es) where
   internalInj eff = That $ internalInj eff
 
   internalPrj (This _) = Nothing
@@ -143,9 +171,9 @@ newtype Eff (es :: [Effect]) a = Eff (Freer es a)
 send :: eff `Member` es => eff (Eff es) a -> Eff es a
 send eff = Eff $ lift $ inj $ eff
 
-type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff:es) a) -> Eff es ans)
+type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff : es) a) -> Eff es ans)
 
-handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff:es) a -> Eff es ans
+handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff : es) a -> Eff es ans
 handle ret _ (Eff (Pure a)) = ret a
 handle _ f (Eff (Impure (This e) next)) = f e (next)
 handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (handle ret f . next)
@@ -162,17 +190,18 @@ runEff (Eff (Impure a _)) = case a of {}
 
 data EIO m a where
   LiftIO :: IO a -> EIO m a
-  -- UnliftIO :: ((forall a. m a -> IO a) -> IO b) -> EIO m b
 
+-- UnliftIO :: ((forall a. m a -> IO a) -> IO b) -> EIO m b
 
 runEffIO :: Eff '[EIO] a -> IO a
 runEffIO (Eff (Pure a)) = pure a
 runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . next . pure
--- runEffIO (Eff (Impure (This (UnliftIO unlift) _) next)) = _ $ unlift (_) -- >>= runEffIO . next . pure -- (Eff . rest <$> unlift (runEffIO . Eff . others)) >>= runEffIO
 runEffIO (Eff (Impure (That union) _)) = case union of {}
 
 instance EIO `Member` es => MonadIO (Eff es) where
-  liftIO = send . LiftIO 
+  liftIO = send . LiftIO
+
+-- instance Free c (Eff es)
 
 -- instance EIO `Member` es => MonadUnliftIO (Eff es) where
 --   withRunInIO action = send $ UnliftIO action

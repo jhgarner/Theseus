@@ -1,0 +1,3 @@
+single-constraint-parens: never
+haddock-style: single-line
+indentation: 2
