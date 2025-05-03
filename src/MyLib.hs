@@ -1,5 +1,8 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE TypeData #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 
 module MyLib (
   Eff (Eff),
@@ -33,40 +36,59 @@ import Data.Kind
 
 -- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
 
-import Control.Effect (Free)
 import Control.Monad ((>=>))
+import Data.Type.Equality
 
 type Effect = (Type -> Type) -> Type -> Type
 
-type Freer :: [Effect] -> Type -> Type
-data Freer es a
-  = Pure a
-  | forall (esSend :: [Effect]) x. Impure (Union es esSend x) (Eff esSend x -> Eff es a)
+type data Requires = Morphism | Complex
 
-deriving instance Functor (Freer h)
+type Freer :: Requires -> [Effect] -> Type -> Type
+data Freer r es a where
+  Pure :: a -> Freer r es a
+  Impure :: (Union es esSend x) -> (Eff esSend x -> Eff (ES Complex es) a) -> Freer Complex es a
+  Simple :: (Union es esSend x) -> (forall z. Eff esSend z -> Eff (ES Morphism es) z) -> (x -> Eff (ES Morphism es) a) -> Freer Morphism es a
 
-instance Applicative (Freer f) where
+asComplex :: Freer r es a -> Freer Complex es a
+asComplex (Pure a) = Pure a
+asComplex (Impure union next) = Impure union next
+asComplex (Simple union trans next) = Impure union (Eff . asComplex . getEff . trans >=> Eff . asComplex . getEff . next)
+
+deriving instance Functor (Freer r h)
+
+instance Applicative (Freer r f) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
   Impure eff next <*> m = Impure eff \x -> next x <*> Eff m
+  Simple eff others next <*> m = Simple eff others \x -> next x <*> Eff m
 
-instance Monad (Freer f) where
+instance Monad (Freer r f) where
   Pure ma >>= fmb = fmb ma
   Impure eff next >>= fmb = Impure eff \x -> next x >>= Eff . fmb
+  Simple eff morph next >>= fmb = Simple eff morph \x -> next x >>= Eff . fmb
 
-lift :: Union es es a -> Freer es a
-lift f = Impure f id
+-- Simple eff others next >>= fmb = Simple eff others \x -> next x >>= Eff . fmb
 
-raise :: Eff es a -> Eff (eff : es) a
+class Liftable r where
+  lift :: Union es (ES r es) a -> Freer r es a
+
+instance Liftable Complex where
+  lift f = Impure f id
+
+instance Liftable Morphism where
+  lift f = Simple f id pure
+
+raise :: Eff (ES r es) a -> Eff (ES r (eff : es)) a
 raise (Eff (Pure a)) = pure a
 raise (Eff (Impure eff next)) = Eff $ Impure (raiseEff eff) (raise . next)
+raise (Eff (Simple eff morph next)) = Eff $ Simple (raiseEff eff) (raise . morph) (raise . next)
 
 raiseEff :: Union es esSend x -> Union (eff : es) esSend x
 raiseEff (This eff) = That (This eff)
 raiseEff (That rest) = That $ raiseEff rest
 
-data Union (ls :: [Effect]) (es :: [Effect]) (a :: Type) where
+data Union (ls :: [Effect]) (es :: EffState) (a :: Type) where
   This :: eff (Eff es) a -> Union (eff : ls) es a
   That :: Union ls es a -> Union (eff : ls) es a
 
@@ -83,7 +105,7 @@ asks = (<$> ask)
 local :: Reader r `Member` es => (r -> r) -> Eff es a -> Eff es a
 local f = send . Local f
 
-runReader :: r -> Eff (Reader r : es) a -> Eff es a
+runReader :: r -> Eff (Reader r `Prep` es) a -> Eff es a
 runReader r = handle pure $ elabReader r
 
 elabReader :: r -> Handler (Reader r) es a a
@@ -103,17 +125,17 @@ gets = (<$> send Get)
 put :: State s `Member` es => s -> Eff es ()
 put = send . Put
 
-runState :: s -> Eff (State s : es) a -> Eff es (s, a)
+runState :: s -> Eff (State s `Prep` es) a -> Eff es (s, a)
 runState s = handle (pure . (s,)) $ elabState s
 
 elabState :: s -> Handler (State s) es a (s, a)
 elabState s Get next = runState s $ next $ pure s
 elabState _ (Put s') next = runState s' $ next $ pure ()
 
-execState :: s -> Eff (State s : es) a -> Eff es s
+execState :: s -> Eff (State s `Prep` es) a -> Eff es s
 execState s = fmap fst . runState s
 
-evalState :: s -> Eff (State s : es) a -> Eff es a
+evalState :: s -> Eff (State s `Prep` es) a -> Eff es a
 evalState s = fmap snd . runState s
 
 newtype Throw e m a where
@@ -123,18 +145,18 @@ throw :: Throw e `Member` es => e -> Eff es a
 throw = send . Throw
 
 data Catch m a where
-  Catch :: Eff (Throw e : es) a -> (e -> Eff es a) -> Catch (Eff es) a
+  Catch :: Eff (Throw e `Prep` es) a -> (e -> Eff es a) -> Catch (Eff es) a
 
-catch :: Catch `Member` es => Eff (Throw e : es) a -> (e -> Eff es a) -> Eff es a
+catch :: Catch `Member` es => Eff (Throw e `Prep` es) a -> (e -> Eff es a) -> Eff es a
 catch action onThrow = send $ Catch action onThrow
 
-runCatch :: Eff (Catch : es) a -> Eff es a
+runCatch :: Eff (Catch `Prep` es) a -> Eff es a
 runCatch = handle pure elabCatch
 
 elabCatch :: Handler Catch es a a
 elabCatch (Catch action onThrow) next = runCatch $ next $ runThrow onThrow action
 
-runThrow :: (e -> Eff es a) -> Eff (Throw e : es) a -> Eff es a
+runThrow :: (e -> Eff es a) -> Eff (Throw e `Prep` es) a -> Eff es a
 runThrow onThrow = handle pure $ elabThrow onThrow
 
 elabThrow :: (e -> Eff es a) -> Handler (Throw e) es a a
@@ -156,24 +178,40 @@ instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other
   internalPrj (This _) = Nothing
   internalPrj (That rest) = internalPrj rest
 
-class InternalMember eff es => Member eff es where
-  inj :: eff (Eff es) a -> Union es es a
+class (InternalMember eff (GetEffects es), Liftable (GetRequires es)) => Member eff (es :: EffState) where
+  inj :: eff (Eff es) a -> Union (GetEffects es) es a
+
+-- class (InternalMember eff es, Liftable r) => HMember eff (es :: [Effect]) (r :: Requires) where
+--   inj :: eff (Eff (ES es r)) a -> Union es (ES es r) a
 
 prj :: InternalMember eff ls => Union ls es a -> Maybe (eff (Eff es) a)
 prj = internalPrj
 
-instance InternalMember eff es => Member eff es where
+instance (InternalMember eff (GetEffects es), Liftable (GetRequires es)) => Member eff es where
   inj = internalInj
 
-newtype Eff (es :: [Effect]) a = Eff (Freer es a)
+type data EffState = ES Requires [Effect]
+type family GetRequires (es :: EffState) :: Requires where
+  GetRequires (ES requires _) = requires
+
+type family GetEffects (es :: EffState) :: [Effect] where
+  GetEffects (ES _ es) = es
+
+type family Prep (eff :: Effect) (es :: EffState) = (result :: EffState) | result -> eff es where
+  Prep eff (ES r es) = ES r (eff : es)
+
+newtype Eff (es :: EffState) a = Eff {getEff :: (Freer (GetRequires es) (GetEffects es) a)}
   deriving (Functor, Applicative, Monad)
 
+isEq :: es ~ ES r ess => es :~: ES (GetRequires es) (GetEffects es)
+isEq = Refl
+
 send :: eff `Member` es => eff (Eff es) a -> Eff es a
-send eff = Eff $ lift $ inj $ eff
+send eff = case isEq of Refl -> Eff $ lift $ inj $ eff
 
-type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff : es) a) -> Eff es ans)
+type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff `Prep` es) a) -> Eff es ans)
 
-handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff : es) a -> Eff es ans
+handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff `Prep` es) a -> Eff es ans
 handle ret _ (Eff (Pure a)) = ret a
 handle _ f (Eff (Impure (This e) next)) = f e (next)
 handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (handle ret f . next)
@@ -184,7 +222,7 @@ interpose ret f (Eff (Impure union next)) = case prj union of
   Just eff -> f eff (raise . next)
   Nothing -> Eff (Impure union (next >=> ret))
 
-runEff :: Eff '[] a -> a
+runEff :: Eff (ES r '[]) a -> a
 runEff (Eff (Pure a)) = a
 runEff (Eff (Impure a _)) = case a of {}
 
@@ -193,7 +231,7 @@ data EIO m a where
 
 -- UnliftIO :: ((forall a. m a -> IO a) -> IO b) -> EIO m b
 
-runEffIO :: Eff '[EIO] a -> IO a
+runEffIO :: Eff (ES r '[EIO]) a -> IO a
 runEffIO (Eff (Pure a)) = pure a
 runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . next . pure
 runEffIO (Eff (Impure (That union) _)) = case union of {}
