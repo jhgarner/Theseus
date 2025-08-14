@@ -33,7 +33,6 @@ import Data.Kind
 
 -- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
 
-import Control.Effect (Free)
 import Control.Monad ((>=>))
 
 type Effect = (Type -> Type) -> Type -> Type
@@ -53,7 +52,7 @@ instance Applicative (Freer f) where
 
 instance Monad (Freer f) where
   Pure ma >>= fmb = fmb ma
-  Impure eff next >>= fmb = Impure eff \x -> next x >>= Eff . fmb
+  Impure eff next >>= fmb = Impure eff (next >=> (Eff . fmb))
 
 lift :: Union es es a -> Freer es a
 lift f = Impure f id
@@ -88,7 +87,7 @@ runReader r = handle pure $ elabReader r
 
 elabReader :: r -> Handler (Reader r) es a a
 elabReader r Ask next = runReader r $ next $ pure r
-elabReader r (Local f m) next = runReader r $ next $ interpose pure (elabReader $ f r) $ m
+elabReader r (Local f m) next = runReader r $ next $ interpose pure (elabReader $ f r) m
 
 data State s m a where
   Get :: State s m s
@@ -145,7 +144,7 @@ class InternalMember eff ls where
   internalPrj :: Union ls es a -> Maybe (eff (Eff es) a)
 
 instance InternalMember eff (eff : es) where
-  internalInj eff = This eff
+  internalInj = This
 
   internalPrj (This eff) = Just eff
   internalPrj (That _) = Nothing
@@ -169,13 +168,13 @@ newtype Eff (es :: [Effect]) a = Eff (Freer es a)
   deriving (Functor, Applicative, Monad)
 
 send :: eff `Member` es => eff (Eff es) a -> Eff es a
-send eff = Eff $ lift $ inj $ eff
+send eff = Eff $ lift $ inj eff
 
 type Handler eff es a ans = (forall esSend x. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff : es) a) -> Eff es ans)
 
 handle :: (a -> Eff es ans) -> Handler eff es a ans -> Eff (eff : es) a -> Eff es ans
 handle ret _ (Eff (Pure a)) = ret a
-handle _ f (Eff (Impure (This e) next)) = f e (next)
+handle _ f (Eff (Impure (This e) next)) = f e next
 handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (handle ret f . next)
 
 interpose :: eff `Member` es => (a -> Eff es ans) -> Handler eff es a ans -> Eff es a -> Eff es ans

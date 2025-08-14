@@ -20,7 +20,7 @@ common shared
         -Wno-partial-type-signatures
         -Wno-name-shadowing
     build-depends:
-        base ^>=4.20.0.0,
+        base ^>=4.21.0.0,
         unliftio-core,
         mtl,
     default-extensions:

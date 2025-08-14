@@ -1,10 +1,11 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Main (main) where
-import Test.Hspec (hspec, describe, it, shouldBe, shouldReturn, Expectation)
+
+import Control.Monad.IO.Class
 import MyLib
 import System.IO.Temp
-import Control.Monad.IO.Class
+import Test.Hspec (Expectation, describe, hspec, it, shouldBe, shouldReturn)
 
 main :: IO ()
 main = hspec do
@@ -34,7 +35,7 @@ main = hspec do
         put "b"
         b <- get
         c <- get
-        pure $ (a, b, c)
+        pure (a, b, c)
 
   describe "Catching" do
     it "Should do nothing if no exceptions are thrown" do
