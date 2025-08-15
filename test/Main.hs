@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Applicative (Alternative (..))
 import Control.Monad.IO.Class
 import MyLib
 import System.IO.Temp
@@ -51,6 +52,18 @@ main = hspec do
       it "When runCatch happens before runState" do
         ("s2", "failure") === runEff $ runState "s" $ runCatch do
           catch (put "s2" *> throw ()) (\() -> pure "failure")
+
+  describe "NonDet" do
+    it "Evaluates left side for collect" do
+      "updated" === runEff $ execState "test" $ runNonDet @[] do put "updated" <|> pure ()
+    it "Evaluates right side for collect" do
+      "updated" === runEff $ execState "test" $ runNonDet @[] do pure () <|> put "updated"
+    it "Evaluates left side for first" do
+      "updated" === runEff $ execState "test" $ runNonDet @Maybe do put "updated" <|> pure ()
+    it "Skips right side for first" do
+      "test" === runEff $ execState "test" $ runNonDet @Maybe do pure () <|> put "updated"
+    it "Evaluates right side for first if left fails" do
+      "updated" === runEff $ execState "test" $ runNonDet @Maybe do empty <|> put "updated"
 
 class Expects a b where
   (===) :: a -> (c -> b) -> c -> Expectation

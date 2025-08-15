@@ -26,6 +26,8 @@ module MyLib (
   throw,
   runCatch,
   runThrow,
+  NonDet,
+  runNonDet,
 ) where
 
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -33,6 +35,7 @@ import Data.Kind
 
 -- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
 
+import Control.Applicative (Alternative (empty, (<|>)))
 import Control.Monad ((>=>))
 
 type Effect = (Type -> Type) -> Type -> Type
@@ -138,6 +141,61 @@ runThrow onThrow = handle pure $ elabThrow onThrow
 
 elabThrow :: (e -> Eff es a) -> Handler (Throw e) es a a
 elabThrow onThrow (Throw e) _ = onThrow e
+
+runCatchNoRecovery :: Eff (Catch : es) a -> Eff es (Maybe a)
+runCatchNoRecovery = handle (pure . Just) elabCatchNoRecovery
+
+elabCatchNoRecovery :: Handler Catch es a (Maybe a)
+elabCatchNoRecovery (Catch action _) next = do
+  ran <- runCatchNoRecovery $ next $ do
+    result <- runThrowNoRecovery action
+    maybe (throw ()) pure result
+  pure Nothing
+
+runThrowNoRecovery :: Eff (Throw e : es) a -> Eff es (Maybe a)
+runThrowNoRecovery = handle (pure . Just) elabThrowNoRecovery
+
+elabThrowNoRecovery :: Handler (Throw e) es a (Maybe a)
+elabThrowNoRecovery (Throw _) _ = pure Nothing
+
+data NonDet m a where
+  Empty :: NonDet m a
+  (:<|>) :: m a -> m a -> NonDet m a
+
+runNonDet ::
+  LazyAlternative f =>
+  Eff (NonDet : es) a ->
+  Eff es (f a)
+runNonDet = handle (pure . pure) elabNonDet
+
+elabNonDet ::
+  LazyAlternative f =>
+  Handler NonDet es a (f a)
+elabNonDet Empty _ = pure empty
+elabNonDet (lhs :<|> rhs) next =
+  runNonDet (next lhs) `lazyAlt` runNonDet (next rhs)
+
+class Alternative f => LazyAlternative f where
+  lazyAlt :: Monad g => g (f a) -> g (f a) -> g (f a)
+
+instance LazyAlternative [] where
+  lazyAlt = liftA2 (<|>)
+
+instance LazyAlternative Maybe where
+  lazyAlt ga gb = ga >>= maybe gb (pure . Just)
+
+instance NonDet `Member` es => Alternative (Eff es) where
+  empty = send Empty
+  a <|> b = send $ a :<|> b
+
+-- data Delay m a where
+--   Delay :: Eff es a -> Delay (Eff es) ()
+--
+-- runDelay :: Eff (Delay : es) a -> Eff es a
+-- runDelay = handle pure elabDelay
+--
+-- elabDelay :: Handler Delay es a a
+-- elabDelay (Delay action) next = runDelay $ next (pure ()) >> action
 
 class InternalMember eff ls where
   internalInj :: eff (Eff es) a -> Union ls es a
