@@ -1,3 +1,4 @@
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Main (main) where
@@ -45,6 +46,10 @@ main = hspec do
     it "Should catch exceptions" do
       "failure" === runEff $ runCatch do
         catch (throw ()) (\() -> pure "failure")
+    describe "When not recovering" do
+      it "Ignores the catching block" do
+        Nothing @() === runEff $ runCatchNoRecovery do
+          catch (throw ()) (undefined :: () -> _)
     describe "State is preserved past a throw" do
       it "When runCatch happens after runState" do
         ("s2", "failure") === runEff $ runCatch $ runState "s" do
@@ -58,10 +63,8 @@ main = hspec do
       "updated" === runEff $ execState "test" $ runNonDet @[] do put "updated" <|> pure ()
     it "Evaluates right side for collect" do
       "updated" === runEff $ execState "test" $ runNonDet @[] do pure () <|> put "updated"
-    it "Evaluates left side for first" do
-      "updated" === runEff $ execState "test" $ runNonDet @Maybe do put "updated" <|> pure ()
-    it "Skips right side for first" do
-      "test" === runEff $ execState "test" $ runNonDet @Maybe do pure () <|> put "updated"
+    it "Evaluates only left side for first" do
+      "updated" === runEff $ execState "test" $ runNonDet @Maybe do put "updated" <|> undefined
     it "Evaluates right side for first if left fails" do
       "updated" === runEff $ execState "test" $ runNonDet @Maybe do empty <|> put "updated"
 

@@ -26,6 +26,7 @@ module MyLib (
   throw,
   runCatch,
   runThrow,
+  runCatchNoRecovery,
   NonDet,
   runNonDet,
 ) where
@@ -36,7 +37,7 @@ import Data.Kind
 -- import Control.Monad.IO.Unlift (MonadUnliftIO (withRunInIO))
 
 import Control.Applicative (Alternative (empty, (<|>)))
-import Control.Monad ((>=>))
+import Control.Monad (join, (>=>))
 import Control.Monad.Identity
 
 type Effect = (Type -> Type) -> Type -> Type
@@ -46,7 +47,7 @@ data Freer es a
   = Pure a
   | forall (esSend :: [Effect]) x. Impure
       (Union es esSend x)
-      (Eff esSend x -> Eff es a)
+      (forall g. (Traversable g, Applicative g) => Eff esSend (g x) -> Eff es (g a))
 
 deriving instance Functor (Freer h)
 
@@ -54,11 +55,11 @@ instance Applicative (Freer f) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff next <*> m = Impure eff \x -> next x <*> Eff m
+  Impure eff next <*> m = Impure eff \x -> fmap sequenceA (next x) <*> Eff m
 
 instance Monad (Freer f) where
   Pure ma >>= fmb = fmb ma
-  Impure eff next >>= fmb = Impure eff (next >=> (Eff . fmb))
+  Impure eff next >>= fmb = Impure eff (next >=> traverse (Eff . fmb))
 
 lift :: Union es es a -> Freer es a
 lift f = Impure f id
@@ -92,8 +93,8 @@ runReader :: r -> Eff (Reader r : es) a -> Eff es a
 runReader r = fmap runIdentity . handle (pure . pure) (elabReader r)
 
 elabReader :: r -> Handler (Reader r) es Identity
-elabReader r Ask next = fmap Identity $ runReader r $ next $ pure r
-elabReader r (Local f m) next = fmap Identity $ runReader r $ next (runIdentity <$> interpose (pure . pure) (elabReader $ f r) m)
+elabReader r Ask next = fmap Identity $ runReader r $ fmap runIdentity $ next $ pure $ pure r
+elabReader r (Local f m) next = Identity <$> runReader r (runIdentity <$> next (interpose (pure . pure) (elabReader $ f r) m))
 
 data State s m a where
   Get :: State s m s
@@ -112,8 +113,8 @@ runState :: s -> Eff (State s : es) a -> Eff es (s, a)
 runState s = handle (pure . (s,)) $ elabState s
 
 elabState :: s -> Handler (State s) es ((,) s)
-elabState s Get next = runState s $ next $ pure s
-elabState _ (Put s') next = runState s' $ next $ pure ()
+elabState s Get next = runState s $ fmap runIdentity $ next $ pure $ pure s
+elabState _ (Put s') next = runState s' $ fmap runIdentity $ next $ pure $ pure ()
 
 execState :: s -> Eff (State s : es) a -> Eff es s
 execState s = fmap fst . runState s
@@ -137,7 +138,7 @@ runCatch :: Eff (Catch : es) a -> Eff es a
 runCatch = fmap runIdentity . handle (pure . pure) elabCatch
 
 elabCatch :: Handler Catch es Identity
-elabCatch (Catch action onThrow) next = fmap Identity $ runCatch $ next $ runThrow action >>= either onThrow pure
+elabCatch (Catch action onThrow) next = fmap Identity $ runCatch $ fmap runIdentity $ next $ fmap pure $ runThrow action >>= either onThrow pure
 
 runThrow :: Eff (Throw e : es) a -> Eff es (Either e a)
 runThrow = handle (pure . pure) elabThrow
@@ -145,38 +146,36 @@ runThrow = handle (pure . pure) elabThrow
 elabThrow :: Handler (Throw e) es (Either e)
 elabThrow (Throw e) _ = pure $ Left e
 
--- runCatchNoRecovery :: Eff (Catch : es) a -> Eff es (Maybe a)
--- runCatchNoRecovery = handle (pure . Just) elabCatchNoRecovery
---
--- elabCatchNoRecovery :: Handler Catch es Maybe
--- elabCatchNoRecovery (Catch action _) next = do
---   ran <- runCatchNoRecovery $ next $ do
---     result <- runThrowNoRecovery action
---     maybe (throw ()) pure result
---   pure Nothing
---
--- runThrowNoRecovery :: Eff (Throw e : es) a -> Eff es (Maybe a)
--- runThrowNoRecovery = handle (pure . Just) elabThrowNoRecovery
---
--- elabThrowNoRecovery :: Handler (Throw e) es Maybe
--- elabThrowNoRecovery (Throw _) _ = pure Nothing
+runCatchNoRecovery :: Eff (Catch : es) a -> Eff es (Maybe a)
+runCatchNoRecovery = handle (pure . Just) elabCatchNoRecovery
+
+elabCatchNoRecovery :: Handler Catch es Maybe
+elabCatchNoRecovery (Catch action _) next = do
+  ran <- runCatchNoRecovery $ next $ runThrowNoRecovery action
+  pure $ join ran
+
+runThrowNoRecovery :: Eff (Throw e : es) a -> Eff es (Maybe a)
+runThrowNoRecovery = handle (pure . Just) elabThrowNoRecovery
+
+elabThrowNoRecovery :: Handler (Throw e) es Maybe
+elabThrowNoRecovery (Throw _) _ = pure Nothing
 
 data NonDet m a where
   Empty :: NonDet m a
   (:<|>) :: m a -> m a -> NonDet m a
 
 runNonDet ::
-  LazyAlternative f =>
+  (LazyAlternative f, Traversable f) =>
   Eff (NonDet : es) a ->
   Eff es (f a)
 runNonDet = handle (pure . pure) elabNonDet
 
 elabNonDet ::
-  LazyAlternative f =>
+  (LazyAlternative f, Traversable f) =>
   Handler NonDet es f
 elabNonDet Empty _ = pure empty
 elabNonDet (lhs :<|> rhs) next =
-  runNonDet (next lhs) `lazyAlt` runNonDet (next rhs)
+  runNonDet (fmap runIdentity $ next $ fmap pure lhs) `lazyAlt` runNonDet (fmap runIdentity $ next $ fmap pure rhs)
 
 class Alternative f => LazyAlternative f where
   lazyAlt :: Monad g => g (f a) -> g (f a) -> g (f a)
@@ -231,18 +230,23 @@ newtype Eff (es :: [Effect]) a = Eff (Freer es a)
 send :: eff `Member` es => eff (Eff es) a -> Eff es a
 send eff = Eff $ lift $ inj eff
 
-type Handler eff es wrap = (forall esSend x a. eff (Eff esSend) x -> (Eff esSend x -> Eff (eff : es) a) -> Eff es (wrap a))
+type Handler eff es wrap =
+  ( forall esSend x a.
+    eff (Eff esSend) x ->
+    (forall g. (Traversable g, Applicative g) => Eff esSend (g x) -> Eff (eff : es) (g a)) ->
+    Eff es (wrap a)
+  )
 
-handle :: (forall a. a -> Eff es (wrap a)) -> Handler eff es wrap -> Eff (eff : es) a -> Eff es (wrap a)
+handle :: Traversable wrap => (forall a. a -> Eff es (wrap a)) -> Handler eff es wrap -> Eff (eff : es) a -> Eff es (wrap a)
 handle ret _ (Eff (Pure a)) = ret a
 handle _ f (Eff (Impure (This e) next)) = f e next
-handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (handle ret f . next)
+handle ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (fmap sequenceA . handle ret f . next)
 
-interpose :: eff `Member` es => (forall a. a -> Eff es (wrap a)) -> Handler eff es wrap -> Eff es a -> Eff es (wrap a)
+interpose :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff es (wrap a)) -> Handler eff es wrap -> Eff es a -> Eff es (wrap a)
 interpose ret _ (Eff (Pure a)) = ret a
 interpose ret f (Eff (Impure union next)) = case prj union of
   Just eff -> f eff (raise . next)
-  Nothing -> Eff (Impure union (next >=> ret))
+  Nothing -> Eff (Impure union (next >=> fmap sequenceA . ret))
 
 runEff :: Eff '[] a -> a
 runEff (Eff (Pure a)) = a
@@ -255,7 +259,7 @@ data EIO m a where
 
 runEffIO :: Eff '[EIO] a -> IO a
 runEffIO (Eff (Pure a)) = pure a
-runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . next . pure
+runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . fmap runIdentity . next . pure . pure
 runEffIO (Eff (Impure (That union) _)) = case union of {}
 
 instance EIO `Member` es => MonadIO (Eff es) where
