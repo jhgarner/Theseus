@@ -22,6 +22,7 @@ common shared
 
   build-depends:
     base ^>=4.21.0.0,
+    distributive,
     mtl,
     selective,
     unliftio-core,

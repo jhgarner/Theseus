@@ -1,4 +1,5 @@
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Main (main) where
@@ -60,13 +61,31 @@ main = hspec do
 
   describe "NonDet" do
     it "Evaluates left side for collect" do
-      "updated" === runEff $ execState "test" $ runNonDet @[] do put "updated" <|> pure ()
+      "updated" === runEff $ execState "test" $ runNonDet @_ @[] do put "updated" <|> pure ()
     it "Evaluates right side for collect" do
-      "updated" === runEff $ execState "test" $ runNonDet @[] do pure () <|> put "updated"
+      "updated" === runEff $ execState "test" $ runNonDet @_ @[] do pure () <|> put "updated"
     it "Evaluates only left side for first" do
-      "updated" === runEff $ execState "test" $ runNonDet @Maybe do put "updated" <|> undefined
+      "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do put "updated" <|> undefined
     it "Evaluates right side for first if left fails" do
-      "updated" === runEff $ execState "test" $ runNonDet @Maybe do empty <|> put "updated"
+      "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do empty <|> put "updated"
+
+  describe "Coroutine" do
+    it "Basically functions" do
+      Just "ab" === runEffDist $ expectCoroutine do
+        let Yielded () rest =
+              runEffDist $ runCoroutine do
+                gotBack <- yield ()
+                pure $ gotBack ++ "b"
+        rest "a"
+
+    it "Interacts with catch" do
+      Just "bc" === runEffDist $ expectCoroutine do
+        let Yielded () rest =
+              runEffDist $ runCoroutine $ runCatch do
+                got <- catch (yield @String () >> throw ()) (\() -> yield @String ())
+                pure $ got ++ "c"
+        let Yielded () rest2 = runEffDist $ runCoroutine $ rest "a"
+        rest2 "b"
 
 class Expects a b where
   (===) :: a -> (c -> b) -> c -> Expectation
