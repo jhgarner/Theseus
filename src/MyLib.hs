@@ -256,14 +256,36 @@ expectCoroutine action =
     Done c -> Just c
     Yielded _ _ -> Nothing
 
--- data Delay m a where
---   Delay :: Eff es a -> Delay (Eff es) ()
---
--- runDelay :: Eff (Delay : es) a -> Eff es a
--- runDelay = handle pure elabDelay
---
--- elabDelay :: Handler Delay es a a
--- elabDelay (Delay action) next = runDelay $ next (pure ()) >> action
+data Writer w :: Effect where
+  Tell :: w -> Writer w m ()
+  Listen :: (Writer w `Member` es, ef Identity) => Eff ef es a -> Writer w (Eff ef es) (w, a)
+  Pass :: (Writer w `Member` es, ef Identity) => Eff ef es (w -> w, a) -> Writer w (Eff ef es) a
+
+tell :: Writer w `Member` es => w -> Eff ef es ()
+tell w = send $ Tell w
+
+listen :: (Writer w `Member` es, ef Identity) => Eff ef es a -> Eff ef es (w, a)
+listen action = send $ Listen action
+
+pass :: (Writer w `Member` es, ef Identity) => Eff ef es (w -> w, a) -> Eff ef es a
+pass action = send $ Pass action
+
+runWriter :: (Monoid w, ef Identity) => Eff ef (Writer w : es) a -> Eff ef es (w, a)
+runWriter = runWriterFrom mempty
+
+runWriterFrom :: (Monoid w, ef Identity) => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
+runWriterFrom w = handle (pure . (w,)) (elabWriter w)
+
+elabWriter :: (Monoid w, ef Identity) => w -> Handler (Writer w) ef es ((,) w)
+elabWriter start (Tell w) next = runWriterFrom (start <> w) $ fmap runIdentity $ next $ pure $ pure ()
+elabWriter start (Listen action) next = runWriterFrom start $ fmap runIdentity $ next $ fmap pure $ do
+  (w, a) <- interpose (pure . (start,)) (elabWriter start) action
+  send $ Tell w
+  pure (w, a)
+elabWriter start (Pass action) next = runWriterFrom start $ fmap runIdentity $ next $ fmap pure $ do
+  (w, (f, a)) <- interpose (pure . (start,)) (elabWriter start) action
+  send $ Tell $ f w
+  pure a
 
 class InternalMember eff ls where
   internalInj :: eff (Eff ef es) a -> Union ls ef es a
