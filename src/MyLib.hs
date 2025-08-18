@@ -39,6 +39,7 @@ import Data.Kind
 import Control.Applicative (Alternative (empty, (<|>)))
 import Control.Monad (join, (>=>))
 import Control.Monad.Identity
+import GHC.Generics (Generic, Generic1)
 
 type Effect = (Type -> Type) -> Type -> Type
 
@@ -51,15 +52,22 @@ data Freer es a
 
 deriving instance Functor (Freer h)
 
-instance Applicative (Freer f) where
+instance Applicative (Freer es) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff next <*> m = Impure eff \x -> fmap sequenceA (next x) <*> Eff m
+  Impure eff next <*> m = Impure eff \x -> do
+    after <- next x
+    rhs <- fmap pure (Eff m)
+    pure $ after <*> rhs
 
 instance Monad (Freer f) where
   Pure ma >>= fmb = fmb ma
-  Impure eff next >>= fmb = Impure eff (next >=> traverse (Eff . fmb))
+  -- Impure eff next >>= fmb = Impure eff (next >=> traverse (Eff . fmb))
+  Impure eff next >>= fmb = Impure eff \x -> do
+    after <- next x
+    let rhs = traverse fmb after
+    Eff rhs
 
 lift :: Union es es a -> Freer es a
 lift f = Impure f id
@@ -189,6 +197,21 @@ instance LazyAlternative Maybe where
 instance NonDet `Member` es => Alternative (Eff es) where
   empty = send Empty
   a <|> b = send $ a :<|> b
+
+data Coroutine a b m c where
+  Yield :: a -> Coroutine a b m b
+
+yield :: Coroutine a1 a2 `Member` es => a1 -> Eff es a2
+yield a = send $ Yield a
+
+data Status es a b c = Done c | Yielded a (b -> Eff (Coroutine a b : es) c)
+  deriving (Functor, Generic, Generic1)
+
+runCoroutine :: Eff (Coroutine a b : es) c -> Eff es (Status es a b c)
+runCoroutine = handle (pure . Done) elabCoroutine
+
+elabCoroutine :: Handler (Coroutine a b) es (Status es a b)
+elabCoroutine (Yield a) next = undefined
 
 -- data Delay m a where
 --   Delay :: Eff es a -> Delay (Eff es) ()
