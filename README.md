@@ -84,6 +84,11 @@ recovered using interpose or similar tricks to define the local boundaries. This
 gives everyone a consistent and reasonable default along with the ability to
 override that default locally.
 
+TODO Although this is true when State interacts with Catch, it's not true when
+state interacts with the NonDet effect. The outcome is dependent on the order.
+That's probably a pain to fix... I still need to write tests for other
+combinations so treat this claims dubiously.
+
 Theseus also treats effects as stronger abstraction boundaries than normal
 function calls. By default effects are only influenced by effects that are in
 scope when the handler is run. If they want to be influenced by effects that are

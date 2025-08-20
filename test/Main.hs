@@ -72,6 +72,10 @@ main = hspec do
       "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do empty <|> put "updated"
     it "Uses global state" do
       "test left right" === runEff $ execState "test" $ runNonDet @_ @[] do modify (++ " left") <|> modify (++ " right")
+    -- TODO this is probably a problem and breaks one of the goals in the
+    -- README.
+    it "Uses local state when state is inside" do
+      ["test left", "test right"] === runEff $ runNonDet @_ @[] $ execState "test" do modify (++ " left") <|> modify (++ " right")
 
   describe "Coroutine" do
     it "Basically functions" do
