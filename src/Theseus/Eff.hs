@@ -103,13 +103,13 @@ interpose :: (eff `Member` es, Traversable wrap, ef Identity) => (forall a. a ->
 interpose ret _ (Eff (Pure a)) = ret a
 interpose ret f (Eff (Impure union next)) = case prj union of
   Just eff -> f eff (raise . (fmap runIdentity . next . fmap Identity))
-  Nothing -> Eff (Impure union (next >=> fmap sequenceA . ret))
+  Nothing -> Eff (Impure union (fmap sequenceA . interpose ret f . next))
 
-interposeWoven :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff ef es (wrap a)) -> HandlerWoven eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)
-interposeWoven ret _ (Eff (Pure a)) = ret a
-interposeWoven ret f (Eff (Impure union next)) = case prj union of
-  Just eff -> f eff (raise . next)
-  Nothing -> Eff (Impure union (next >=> fmap sequenceA . ret))
+-- interposeWoven :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff ef es (wrap a)) -> HandlerWoven eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)
+-- interposeWoven ret _ (Eff (Pure a)) = ret a
+-- interposeWoven ret f (Eff (Impure union next)) = case prj union of
+--   Just eff -> f eff (raise . next)
+--   Nothing -> Eff (Impure union (next >=> fmap sequenceA . ret))
 
 handle' :: Functor wrap => (forall a. a -> Eff Distributive es (wrap a)) -> Handler eff Distributive es wrap -> Eff Distributive (eff : es) a -> Eff Distributive es (wrap a)
 handle' ret _ (Eff (Pure a)) = ret a

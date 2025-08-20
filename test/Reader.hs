@@ -1,5 +1,6 @@
 module Reader where
 
+import Control.Applicative
 import Theseus.Eff
 import Theseus.Effect.Reader
 import Utils
@@ -14,6 +15,15 @@ testReader = do
     describe "Local" do
       it "modifies the original value" do
         "test local" === runEff $ runReader "test" do local (++ " local") ask
+      it "modifies the original value multiple times" do
+        ("test local", "test local") === runEff $ runReader "test" do
+          local (++ " local") $ liftA2 (,) ask ask
+      it "modifies the original value multiple times even when doing other stuff in between" do
+        ("test local", (), "test local") === runEff $ runReader () $ runReader "test" do
+          local (++ " local") $ liftA3 (,,) ask ask ask
+      it "works when you use the no local reader" do
+        ("test", "test") === runEff $ runReaderNoLocal "test" do
+          local (++ " local") $ liftA2 (,) ask ask
       it "composes well with coroutines when you swap out the ask" do
         ("first local", "second local") === runEffDist $ do
           rest <- runReader "first" $ yieldCoroutine do
@@ -32,4 +42,15 @@ testReader = do
               unitYield
               lastAsk <- ask
               pure (firstAsk, lastAsk)
+          runReaderNoLocal "second" $ doneCoroutine rest
+      it "picks up the new local implementation after the current local finishes" do
+        ("first local", "second local", "second") === runEffDist $ do
+          rest <- runReader "first" $ yieldCoroutine do
+            (first, second) <- local (++ " local") do
+              firstAsk <- ask
+              unitYield
+              lastAsk <- ask
+              pure (firstAsk, lastAsk)
+            third <- local (++ " never") ask
+            pure (first, second, third)
           runReaderNoLocal "second" $ doneCoroutine rest
