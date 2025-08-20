@@ -36,14 +36,27 @@ common shared
 
 library
   import: shared
-  exposed-modules: MyLib
+  exposed-modules:
+    Theseus.Eff
+    Theseus.Effect.Coroutine
+    Theseus.Effect.Error
+    Theseus.Effect.IO
+    Theseus.Effect.NonDet
+    Theseus.Effect.Reader
+    Theseus.Effect.State
+    Theseus.Effect.Writer
+    Theseus.Union
+
   -- other-modules:
   -- other-extensions:
   hs-source-dirs: src
 
 test-suite theseus-test
   import: shared
-  -- other-modules:
+  other-modules:
+    Reader
+    Utils
+
   -- other-extensions:
   type: exitcode-stdio-1.0
   hs-source-dirs: test

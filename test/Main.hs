@@ -6,12 +6,20 @@ module Main (main) where
 
 import Control.Applicative (Alternative (..))
 import Control.Monad.IO.Class
-import MyLib
+import Control.Monad.Identity
+import Reader (testReader)
 import System.IO.Temp
-import Test.Hspec (Expectation, describe, hspec, it, shouldBe, shouldReturn)
+import Theseus.Eff
+import Theseus.Effect.Coroutine
+import Theseus.Effect.Error
+import Theseus.Effect.IO
+import Theseus.Effect.NonDet
+import Theseus.Effect.State
+import Utils
 
 main :: IO ()
 main = hspec do
+  testReader
   describe "Empty Eff" do
     it "Should work fine with pure" do
       "test" === runEff $ pure "test"
@@ -20,14 +28,6 @@ main = hspec do
     it "Should handle IO actions correctly" do
       "test" === runEffIO $ liftIO do
         writeSystemTempFile "test.txt" "test" >>= readFile
-
-  describe "Reader" do
-    it "must have a working ask method" do
-      ("test", "test") === runEff $ runReader "test" do liftA2 (,) ask ask
-    it "Must support multiple stacks" do
-      ("inner", ()) === runEff $ runReader () $ runReader "inner" do liftA2 (,) ask ask
-    it "must have a working local method" do
-      "test local" === runEff $ runReader "test" do local (++ " local") ask
 
   describe "State" do
     it "Get without put should act like ask" do
@@ -64,14 +64,18 @@ main = hspec do
       "updated" === runEff $ execState "test" $ runNonDet @_ @[] do put "updated" <|> pure ()
     it "Evaluates right side for collect" do
       "updated" === runEff $ execState "test" $ runNonDet @_ @[] do pure () <|> put "updated"
+    -- TODO is this lazy thing a useful property, or is it confusing and hurts
+    -- your ability to reason about code locally?
     it "Evaluates only left side for first" do
       "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do put "updated" <|> undefined
     it "Evaluates right side for first if left fails" do
       "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do empty <|> put "updated"
+    it "Uses global state" do
+      "test left right" === runEff $ execState "test" $ runNonDet @_ @[] do modify (++ " left") <|> modify (++ " right")
 
   describe "Coroutine" do
     it "Basically functions" do
-      Just "ab" === runEffDist $ expectCoroutine do
+      "ab" === runEffDist $ doneCoroutine do
         let Yielded () rest =
               runEffDist $ runCoroutine do
                 gotBack <- yield ()
@@ -79,21 +83,152 @@ main = hspec do
         rest "a"
 
     it "Interacts with catch" do
-      Just "bc" === runEffDist $ expectCoroutine do
+      "bc" === runEffDist $ doneCoroutine do
         let Yielded () rest =
               runEffDist $ runCoroutine $ runCatch do
                 got <- catch (yield @String () >> throw ()) (\() -> yield @String ())
                 pure $ got ++ "c"
         let Yielded () rest2 = runEffDist $ runCoroutine $ rest "a"
         rest2 "b"
+    -- TODO rewrite these Coroutine tests in a more readable way. They start
+    -- alright, but they quickly get bad. Everything after this point was coded
+    -- very quickly because I was worried about how this all would work.
+    it "Allows simple reinterpretation" do
+      "ab" === runEffDist $ runSimple "b" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimple "a" $ runCoroutine do
+                a <- act
+                () <- yield ()
+                b <- act
+                pure $ a ++ b
+        rest ()
+    it "Allows complex reinterpretation" do
+      "ab" === runEffDist $ runCatch $ runSimple "b" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runCatch $ runSimple "a" $ runCoroutine do
+                catch (pure ()) (\() -> pure ())
+                a <- act
+                () <- yield ()
+                b <- act
+                pure $ a ++ b
+        rest ()
 
-class Expects a b where
-  (===) :: a -> (c -> b) -> c -> Expectation
+    it "Allows complexer reinterpretation" do
+      "ab" === runEffDist $ runSimple "b" $ runSimpleH "c" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimple "a" $ runSimpleH "c" $ runCoroutine do
+                _ <- actH $ pure "nope"
+                a <- act
+                () <- yield ()
+                b <- act
+                pure $ a ++ b
+        rest ()
 
-infix 1 ===
+    it "Allows complexerer reinterpretation" do
+      "abc" === runEffDist $ runSimple "b" $ runSimpleH "c" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimple "a" $ runSimpleH "c" $ runCoroutine do
+                actH do
+                  a <- act
+                  () <- yield ()
+                  b <- act
+                  pure $ a ++ b
+        rest ()
 
-instance {-# INCOHERENT #-} (a ~ b, Eq a, Show a) => Expects a b where
-  lhs === rhs = (`shouldBe` lhs) . rhs
+    it "Allows complexererer reinterpretation" do
+      "abc" === runEffDist $ runSimpleH "c" $ runSimple "b" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimpleH "c" $ runSimple "a" $ runCoroutine do
+                actH do
+                  a <- act
+                  () <- yield ()
+                  b <- act
+                  pure $ a ++ b
+        rest ()
 
-instance (Eq a, Show a) => Expects a (IO a) where
-  lhs === rhs = (`shouldReturn` lhs) . rhs
+    it "Allows complexerererer reinterpretation" do
+      "abcde" === runEffDist $ runSimpleH "e" $ runSimple "b" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimpleH "c" $ runSimple "a" $ runCoroutine do
+                first <- actH do
+                  a <- act
+                  () <- yield ()
+                  b <- act
+                  pure $ a ++ b
+                second <- actH $ pure "d"
+                pure $ first ++ second
+        rest ()
+
+    it "Allows complexererererer reinterpretation" do
+      "abcde" === runEffDist $ runSimple "b" $ runSimpleH "e" $ doneCoroutine do
+        let Yielded () rest =
+              runEffDist $ runSimple "a" $ runSimpleH "c" $ runCoroutine do
+                first <- actH do
+                  a <- act
+                  () <- yield ()
+                  b <- act
+                  pure $ a ++ b
+                second <- actH $ pure "d"
+                pure $ first ++ second
+        rest ()
+
+    it "Allows complexerererererer reinterpretation" do
+      SHW "bx" "bx" "ay ay[ab]bybxdbx ay" === runEffDist $ runSimple "b" $ runSimpleHWrapping (fmap (++ "x") act) $ doneCoroutine do
+        let SHW f s (Yielded () rest) =
+              runEffDist $ runSimple "a" $ runSimpleHWrapping (fmap (++ "y") act) $ runCoroutine do
+                first <- actH do
+                  a <- act
+                  () <- yield ()
+                  b <- act
+                  pure $ "[" ++ a ++ b ++ "]"
+                second <- actH $ pure "d"
+                pure $ first ++ second
+        result <- rest ()
+        pure $ f ++ " " ++ result ++ " " ++ s
+
+data Simple :: Effect where
+  Act :: Simple m String
+
+act :: Simple `Member` es => Eff ef es String
+act = send Act
+
+runSimple :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es a
+runSimple s = fmap runIdentity . runSimple' s
+
+runSimple' :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es (Identity a)
+runSimple' s = handle (pure . pure) (elabSimple s)
+
+elabSimple :: ef Identity => String -> Handler Simple ef es Identity
+elabSimple s Act next = runSimple' s $ next $ pure s
+
+data SimpleH :: Effect where
+  ActH :: Simple `Member` es => Eff ef es String -> SimpleH (Eff ef es) String
+
+runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
+runSimpleH s = fmap runIdentity . runSimpleH' s
+
+runSimpleH' :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es (Identity a)
+runSimpleH' s = handle (pure . pure) (elabSimpleH s)
+
+elabSimpleH :: ef Identity => String -> Handler SimpleH ef es Identity
+elabSimpleH s (ActH action) next = runSimpleH' s $ next $ fmap (++ s) action
+
+runSimpleHWrapping :: (Simple `Member` es, ef Identity) => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
+runSimpleHWrapping s = handle (pure . SHW "" "") (elabSimpleHWrapping s)
+
+data SHW a = SHW String String a
+  deriving (Functor, Foldable, Traversable, Eq, Show)
+
+elabSimpleHWrapping :: (Simple `Member` es, ef Identity) => (forall ef es. Simple `Member` es => Eff ef es String) -> Handler SimpleH ef es SHW
+elabSimpleHWrapping s (ActH action) next = do
+  fo <- s
+  SHW fr sr result <- runSimpleHWrapping s $ next do
+    fi <- s
+    result <- action
+    si <- s
+    pure $ fi ++ result ++ si
+  so <- s
+  pure $ SHW (fo ++ fr) (sr ++ so) result
+
+actH :: (SimpleH `Member` es, Simple `Member` es) => Eff ef es String -> Eff ef es String
+actH action = send $ ActH action
