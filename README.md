@@ -52,9 +52,9 @@ state assuming the state isn't needed after `runCoroutine`.
 ### Higher Order Effects
 
 This is the part where Theseus budges the most. Theseus is designed to support a
-useful subset of higher order effects (such as Catch, Local, Writer, and a
-higher order NonDet). It does not support all possible higher order effects
-though. For example, the following would be impossible to define in Theseus.
+useful subset of higher order effects (such as Catch, Local, and Writer). It
+does not support all possible higher order effects though. For example, the
+following would be impossible to define in Theseus.
 
 ```haskell
 data Defer a :: Effect where

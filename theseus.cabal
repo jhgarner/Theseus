@@ -38,10 +38,10 @@ library
   import: shared
   exposed-modules:
     Theseus.Eff
+    Theseus.Effect.Choice
     Theseus.Effect.Coroutine
     Theseus.Effect.Error
     Theseus.Effect.IO
-    Theseus.Effect.NonDet
     Theseus.Effect.Reader
     Theseus.Effect.State
     Theseus.Effect.Writer
@@ -54,6 +54,7 @@ library
 test-suite theseus-test
   import: shared
   other-modules:
+    Choice
     Reader
     Utils
 

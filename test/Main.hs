@@ -4,22 +4,24 @@
 
 module Main (main) where
 
+import Choice (testChoice)
 import Control.Applicative (Alternative (..))
 import Control.Monad.IO.Class
 import Control.Monad.Identity
 import Reader (testReader)
 import System.IO.Temp
 import Theseus.Eff
+import Theseus.Effect.Choice
 import Theseus.Effect.Coroutine
 import Theseus.Effect.Error
 import Theseus.Effect.IO
-import Theseus.Effect.NonDet
 import Theseus.Effect.State
 import Utils
 
 main :: IO ()
 main = hspec do
   testReader
+  testChoice
   describe "Empty Eff" do
     it "Should work fine with pure" do
       "test" === runEff $ pure "test"
@@ -61,21 +63,16 @@ main = hspec do
 
   describe "NonDet" do
     it "Evaluates left side for collect" do
-      "updated" === runEff $ execState "test" $ runNonDet @_ @[] do put "updated" <|> pure ()
+      "updated" === runEff $ execState "test" $ runChoice @[] do put "updated" <|> pure ()
     it "Evaluates right side for collect" do
-      "updated" === runEff $ execState "test" $ runNonDet @_ @[] do pure () <|> put "updated"
-    -- TODO is this lazy thing a useful property, or is it confusing and hurts
-    -- your ability to reason about code locally?
-    it "Evaluates only left side for first" do
-      "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do put "updated" <|> undefined
-    it "Evaluates right side for first if left fails" do
-      "updated" === runEff $ execState "test" $ runNonDet @_ @Maybe do empty <|> put "updated"
+      "updated" === runEff $ execState "test" $ runChoice @[] do pure () <|> put "updated"
     it "Uses global state" do
-      "test left right" === runEff $ execState "test" $ runNonDet @_ @[] do modify (++ " left") <|> modify (++ " right")
-    -- TODO this is probably a problem and breaks one of the goals in the
-    -- README.
-    it "Uses local state when state is inside" do
-      ["test left", "test right"] === runEff $ runNonDet @_ @[] $ execState "test" do modify (++ " left") <|> modify (++ " right")
+      "test left right" === runEff $ execState "test" $ runChoice @[] do modify (++ " left") <|> modify (++ " right")
+    -- TODO this is unsatisfying because it goes against the idea that semantics
+    -- are locally definable. There's no longer an easy way to say whether state
+    -- will be preserved between branches or not.
+    it "Uses local when state is inside" do
+      ["test left", "test right"] === runEff $ runChoice $ execState "test" do modify (++ " left") <|> modify (++ " right")
 
   describe "Coroutine" do
     it "Basically functions" do
