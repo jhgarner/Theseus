@@ -15,6 +15,7 @@ module Theseus.Eff (
   runEffDist,
   Member,
   Handler,
+  IHandler,
   Boring,
   HandlerWoven,
   handleWoven,
@@ -63,7 +64,7 @@ restrict (Eff (Impure eff next)) = Eff $ Impure eff (restrict . next)
 lift :: Union es (Eff ef es) a -> Freer ef es a
 lift f = Impure f id
 
-raise :: Eff ef es a -> Eff ef (eff : es) a
+raise :: forall eff ef es a. Eff ef es a -> Eff ef (eff : es) a
 raise (Eff (Pure a)) = pure a
 raise (Eff (Impure eff next)) = Eff $ Impure (raiseEff eff) (raise . next)
 
@@ -99,10 +100,18 @@ handleWoven ret _ (Eff (Pure a)) = ret a
 handleWoven _ f (Eff (Impure (This e) next)) = f e next
 handleWoven ret f (Eff (Impure (That rest) next)) = Eff $ Impure rest (fmap sequenceA . handleWoven ret f . next)
 
-interpose :: (eff `Member` es, Traversable wrap, ef Identity) => (forall a. a -> Eff ef es (wrap a)) -> Handler eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)
+type IHandler eff ef es wrap =
+  ( forall esSend efSend x a.
+    (ef Identity, eff `Member` es) =>
+    eff (Eff efSend esSend) x ->
+    (Eff efSend esSend x -> Eff ef es a) ->
+    Eff ef es (wrap a)
+  )
+
+interpose :: (eff `Member` es, Traversable wrap, ef Identity) => (forall a. a -> Eff ef es (wrap a)) -> IHandler eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)
 interpose ret _ (Eff (Pure a)) = ret a
 interpose ret f (Eff (Impure union next)) = case prj union of
-  Just eff -> f eff (raise . (fmap runIdentity . next . fmap Identity))
+  Just eff -> f eff (fmap runIdentity . next . fmap Identity)
   Nothing -> Eff (Impure union (fmap sequenceA . interpose ret f . next))
 
 -- interposeWoven :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff ef es (wrap a)) -> HandlerWoven eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)

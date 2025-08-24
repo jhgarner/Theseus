@@ -23,13 +23,16 @@ runWriter = runWriterFrom mempty
 runWriterFrom :: (Monoid w, ef Identity) => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
 runWriterFrom w = handle (pure . (w,)) (elabWriter w)
 
+-- Writer is currently broken and I need to fix it. Interpose is easy to use
+-- incorrectly.
 elabWriter :: (Monoid w, ef Identity) => w -> Handler (Writer w) ef es ((,) w)
 elabWriter start (Tell w) next = runWriterFrom (start <> w) $ next $ pure ()
-elabWriter start (Listen action) next = runWriterFrom start $ next do
-  (w, a) <- interpose (pure . (start,)) (elabWriter start) action
-  send $ Tell w
-  pure (w, a)
-elabWriter start (Pass action) next = runWriterFrom start $ next do
-  (w, (f, a)) <- interpose (pure . (start,)) (elabWriter start) action
-  send $ Tell $ f w
-  pure a
+
+-- elabWriter start (Listen action) next = runWriterFrom start $ next do
+--   (w, a) <- interpose (pure . (start,)) (elabWriter start) action
+--   send $ Tell w
+--   pure (w, a)
+-- elabWriter start (Pass action) next = runWriterFrom start $ next do
+--   (w, (f, a)) <- interpose (pure . (start,)) (elabWriter start) action
+--   send $ Tell $ f w
+--   pure a

@@ -48,7 +48,10 @@ elabReader r (Local f m) next = runReaderId r $ next $ runIdentity <$> interpose
 interposeLocal :: (Reader r `Member` es, ef Identity) => (r -> r) -> Eff ef es a -> Eff ef es (Identity a)
 interposeLocal f = interpose (pure . pure) \eff next -> do
   x <- asks f
-  interposeLocal f $ runIdentity <$> elabReader x eff next
+  interposeLocal f $
+    case eff of
+      Ask -> next $ pure x
+      Local f' m -> next $ runIdentity <$> interposeLocal f' m
 
 -- This is a version of Reader which completely ignores the function passed to
 -- local. It's pointless and you should never use it, but it illustrates one of

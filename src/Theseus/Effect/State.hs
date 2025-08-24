@@ -1,3 +1,5 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 module Theseus.Effect.State where
 
 import Control.Monad.Identity
@@ -31,3 +33,17 @@ execState s = fmap fst . runState s
 
 evalState :: ef Identity => s -> Eff ef (State s : es) a -> Eff ef es a
 evalState s = fmap snd . runState s
+
+interposeState :: (State s `Member` es, ef Identity) => s -> Eff ef es a -> Eff ef es (s, a)
+interposeState s = interpose (pure . (s,)) $ elabStateInterpose s
+
+elabStateInterpose :: s -> IHandler (State s) ef es ((,) s)
+elabStateInterpose s Get next = interposeState s $ next $ pure s
+elabStateInterpose _ (Put s') next = interposeState s' $ next $ pure ()
+
+transactionally :: (State s `Member` es, ef Identity) => Eff ef es a -> Eff ef es a
+transactionally @s action = do
+  initial <- get @s
+  (newS, a) <- interposeState initial action
+  put newS
+  pure a

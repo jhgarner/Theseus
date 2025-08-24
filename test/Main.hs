@@ -9,6 +9,7 @@ import Control.Applicative (Alternative (..))
 import Control.Monad.IO.Class
 import Control.Monad.Identity
 import Reader (testReader)
+import State (testState)
 import System.IO.Temp
 import Theseus.Eff
 import Theseus.Effect.Choice
@@ -22,6 +23,7 @@ main :: IO ()
 main = hspec do
   testReader
   testChoice
+  testState
   describe "Empty Eff" do
     it "Should work fine with pure" do
       "test" === runEff $ pure "test"
@@ -68,11 +70,6 @@ main = hspec do
       "updated" === runEff $ execState "test" $ runChoice @[] do pure () <|> put "updated"
     it "Uses global state" do
       "test left right" === runEff $ execState "test" $ runChoice @[] do modify (++ " left") <|> modify (++ " right")
-    -- TODO this is unsatisfying because it goes against the idea that semantics
-    -- are locally definable. There's no longer an easy way to say whether state
-    -- will be preserved between branches or not.
-    it "Uses local when state is inside" do
-      ["test left", "test right"] === runEff $ runChoice $ execState "test" do modify (++ " left") <|> modify (++ " right")
 
   describe "Coroutine" do
     it "Basically functions" do
