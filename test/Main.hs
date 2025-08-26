@@ -190,28 +190,28 @@ data Simple :: Effect where
 act :: Simple `Member` es => Eff ef es String
 act = send Act
 
-runSimple :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es a
+runSimple :: String -> Eff ef (Simple : es) a -> Eff ef es a
 runSimple s = fmap runIdentity . runSimple' s
 
-runSimple' :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es (Identity a)
+runSimple' :: String -> Eff ef (Simple : es) a -> Eff ef es (Identity a)
 runSimple' s = handle (pure . pure) (elabSimple s)
 
-elabSimple :: ef Identity => String -> Handler Simple ef es Identity
+elabSimple :: String -> Handler Simple ef es Identity
 elabSimple s Act next = runSimple' s $ next $ pure s
 
 data SimpleH :: Effect where
   ActH :: Simple `Member` es => Eff ef es String -> SimpleH (Eff ef es) String
 
-runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
+runSimpleH :: String -> Eff ef (SimpleH : es) a -> Eff ef es a
 runSimpleH s = fmap runIdentity . runSimpleH' s
 
-runSimpleH' :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es (Identity a)
+runSimpleH' :: String -> Eff ef (SimpleH : es) a -> Eff ef es (Identity a)
 runSimpleH' s = handle (pure . pure) (elabSimpleH s)
 
-elabSimpleH :: ef Identity => String -> Handler SimpleH ef es Identity
+elabSimpleH :: String -> Handler SimpleH ef es Identity
 elabSimpleH s (ActH action) next = runSimpleH' s $ next $ fmap (++ s) action
 
-runSimpleHWrapping :: (Simple `Member` es, ef Identity) => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
+runSimpleHWrapping :: Simple `Member` es => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
 runSimpleHWrapping s = handle (pure . SHW "" "") (elabSimpleHWrapping s)
 
 data SHW a = SHW String String a

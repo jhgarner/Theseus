@@ -17,7 +17,7 @@ data Choice :: Effect where
   Choose :: Choice (Eff ef (Choice : es)) Bool
 
 runChoice ::
-  (Alternative f, ef Identity, Traversable f) =>
+  (Alternative f, Traversable f) =>
   Eff ef (Choice : es) a ->
   Eff ef es (f a)
 runChoice = handle (pure . pure) elabChoice
@@ -28,7 +28,7 @@ elabChoice Choose next =
   liftA2 (<|>) (runChoice $ next $ pure True) (runChoice $ next $ pure False)
 
 pauseChoice ::
-  (Pausable into, Collect into `Member` es, ef Identity, Traversable wrap) =>
+  (Pausable into, Collect into `Member` es, Traversable wrap) =>
   (forall a. Eff ef es a -> Eff ef' (Choice : es') (wrap a)) ->
   Eff ef (Choice : es) a ->
   Eff ef' (Choice : es') (wrap a)
@@ -48,15 +48,15 @@ instance Alternative (Eff ef (Choice : es)) where
       False -> b
 
 data Collect into :: Effect where
-  Collect :: ef Identity => Eff ef (Choice : es) a -> Collect into (Eff ef es) (into a)
+  Collect :: Eff ef (Choice : es) a -> Collect into (Eff ef es) (into a)
 
-collect :: (Collect into `Member` es, ef Identity) => Eff ef (Choice : es) a -> Eff ef es (into a)
+collect :: Collect into `Member` es => Eff ef (Choice : es) a -> Eff ef es (into a)
 collect action = send $ Collect action
 
-runCollect :: (Alternative into, Traversable into, ef Identity) => Eff ef (Collect into : es) a -> Eff ef es a
+runCollect :: (Alternative into, Traversable into) => Eff ef (Collect into : es) a -> Eff ef es a
 runCollect = fmap runIdentity . runCollectId
 
-runCollectId :: (Alternative into, Traversable into, ef Identity) => Eff ef (Collect into : es) a -> Eff ef es (Identity a)
+runCollectId :: (Alternative into, Traversable into) => Eff ef (Collect into : es) a -> Eff ef es (Identity a)
 runCollectId = handle (pure . pure) \(Collect action) next -> runCollectId $ next $ runChoice action
 
 class Applicative alt => Pausable alt where

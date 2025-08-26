@@ -11,9 +11,10 @@ data EIO m a where
   LiftIO :: IO a -> EIO m a
 
 runEffIO :: Eff Boring '[EIO] a -> IO a
-runEffIO (Eff (Pure a)) = pure a
-runEffIO (Eff (Impure (This (LiftIO io)) next)) = io >>= runEffIO . fmap runIdentity . next . pure . pure
-runEffIO (Eff (Impure (That union) _)) = case union of {}
+runEffIO (Eff act) = case act Facts of
+  Pure a -> pure a
+  Impure (This (LiftIO io)) next -> io >>= runEffIO . fmap runIdentity . next . pure . pure
+  Impure (That union) _ -> case union of {}
 
 instance EIO `Member` es => MonadIO (Eff ef es) where
   liftIO = send . LiftIO
