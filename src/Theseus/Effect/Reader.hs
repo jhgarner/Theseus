@@ -5,9 +5,7 @@ import Theseus.Eff
 
 data Reader r m a where
   Ask :: Reader r m r
-  -- This is a more verbose version of Local than you might be used to. I'm not
-  -- sure I like it. I'd really like to hide everything before the =>.
-  Local :: Reader r `Member` es => (r -> r) -> Eff ef es a -> Reader r (Eff ef es) a
+  Local :: (r -> r) -> Eff ef es a -> Reader r (Eff ef es) a
 
 ask :: Reader r `Member` es => Eff ef es r
 ask = send Ask

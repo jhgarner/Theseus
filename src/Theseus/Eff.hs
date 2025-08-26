@@ -44,11 +44,14 @@ type Effect = (Type -> Type) -> Type -> Type
 
 type ExtraFacts = (Type -> Type) -> Constraint
 
+class eff `Member` es => FlipMember es eff
+instance eff `Member` es => FlipMember es eff
+
 data Freer :: ExtraFacts -> [Effect] -> Type -> Type where
   Pure :: a -> Freer ef es a
   Impure ::
     efSend Identity =>
-    (Union es (Eff efSend esSend) x) ->
+    (Union es (FlipMember esSend) (Eff efSend esSend) x) ->
     (forall g. (ef g, Traversable g, Applicative g) => Eff efSend esSend (g x) -> Eff ef es (g a)) ->
     Freer ef es a
 
@@ -73,7 +76,7 @@ restrict (Eff act) = Eff \Facts -> case act Facts of
   Pure a -> Pure a
   Impure eff next -> Impure eff (restrict . next)
 
-lift :: ef Identity => Union es (Eff ef es) a -> Freer ef es a
+lift :: ef Identity => Union es (FlipMember es) (Eff ef es) a -> Freer ef es a
 lift f = Impure f id
 
 raise :: forall eff ef es a. Eff ef es a -> Eff ef (eff : es) a
@@ -81,7 +84,7 @@ raise (Eff act) = Eff \Facts -> case act Facts of
   Pure a -> pure a
   Impure eff next -> Impure (raiseEff eff) (raise . next)
 
-raiseEff :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
+raiseEff :: Union es (FlipMember esSend) (Eff ef esSend) x -> Union (eff : es) (FlipMember esSend) (Eff ef esSend) x
 raiseEff (This eff) = That (This eff)
 raiseEff (That rest) = That $ raiseEff rest
 
@@ -90,7 +93,7 @@ send eff = Eff \Facts -> lift $ inj eff
 
 type Handler eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity) =>
+    (ef Identity, efSend Identity, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef (eff : es) a) ->
     Eff ef es (wrap a)
@@ -104,7 +107,7 @@ handle ret f (Eff act) = Eff $ \Facts -> case act Facts of
 
 type HandlerWoven eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity) =>
+    (ef Identity, efSend Identity, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
     (forall g. (ef g, Traversable g, Applicative g) => Eff efSend esSend (g x) -> Eff ef (eff : es) (g a)) ->
     Eff ef es (wrap a)
@@ -120,7 +123,7 @@ handleWoven ret f (Eff act) = Eff $ \Facts -> case act Facts of
 
 type IHandler eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` es) =>
+    (ef Identity, efSend Identity, eff `Member` es, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es (wrap a)
@@ -130,8 +133,8 @@ interpose :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff ef es (w
 interpose ret f (Eff act) = Eff \Facts -> case act Facts of
   Pure a -> unEff (ret a) Facts
   Impure union next -> case prj union of
-    Just eff -> unEff (f eff (fmap runIdentity . next . fmap Identity)) Facts
-    Nothing -> Impure union (fmap sequenceA . interpose ret f . next)
+    JustFact eff -> unEff (f eff (fmap runIdentity . next . fmap Identity)) Facts
+    NothingFact -> Impure union (fmap sequenceA . interpose ret f . next)
 
 -- interposeWoven :: (eff `Member` es, Traversable wrap) => (forall a. a -> Eff ef es (wrap a)) -> HandlerWoven eff ef es wrap -> Eff ef es a -> Eff ef es (wrap a)
 -- interposeWoven ret _ (Eff (Pure a)) = ret a

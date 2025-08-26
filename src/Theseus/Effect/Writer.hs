@@ -4,8 +4,8 @@ import Theseus.Eff
 
 data Writer w :: Effect where
   Tell :: w -> Writer w m ()
-  Listen :: Writer w `Member` es => Eff ef es a -> Writer w (Eff ef es) (w, a)
-  Pass :: Writer w `Member` es => Eff ef es (w -> w, a) -> Writer w (Eff ef es) a
+  Listen :: Eff ef es a -> Writer w (Eff ef es) (w, a)
+  Pass :: Eff ef es (w -> w, a) -> Writer w (Eff ef es) a
 
 tell :: Writer w `Member` es => w -> Eff ef es ()
 tell w = send $ Tell w
