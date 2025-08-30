@@ -42,12 +42,7 @@ sure `runCatchNoRecovery` is executed before `runCoroutine` is executed.
 The system which backs this threaded state is pretty flexible and is tracked by
 the `ef` variable on `Eff`. The `ef` name stands for "extra facts" because it
 marks the extra constraints that other parts of the codebase can assume to be
-true. I like how powerful it is, but I'm less thrilled by how noisy it can make
-some of the code. You'll probably see `ef Identity` as a constraint in various
-places. This just means that, whatever `ef` might be, `Identity` must satisfy
-it. This is important because the vast majority of effects will use `Identity`
-as their threaded state. Anything that's `Traversable` could be used as threaded
-state assuming the state isn't needed after `runCoroutine`.
+true.
 
 ### Higher Order Effects
 
@@ -79,15 +74,10 @@ used.
 
 Theseus adopts the global state semantics as that's the most intuitive (if you
 told a Java programmer that mutable variables would be reset after an exception
-is thrown, they'd look at you funny). Transactional/local semantics can be
+was thrown, they'd look at you funny). Transactional/local semantics can be
 recovered using interpose or similar tricks to define the local boundaries. This
 gives everyone a consistent and reasonable default along with the ability to
 override that default locally.
-
-TODO Although this is true when State interacts with Catch, it's not true when
-state interacts with the NonDet effect. The outcome is dependent on the order.
-That's probably a pain to fix... I still need to write tests for other
-combinations so treat this claims dubiously.
 
 Theseus also treats effects as stronger abstraction boundaries than normal
 function calls. By default effects are only influenced by effects that are in
@@ -121,4 +111,4 @@ your handler finished running.
 
 You have to be careful about how you write your higher order effects if you want
 to make sure that the most up to date behavior is always used. Figuring out
-which patterns work well and making those easy would be good.
+which patterns work well and making those easy is still needed.
