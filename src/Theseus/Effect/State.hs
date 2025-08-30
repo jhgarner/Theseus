@@ -21,11 +21,11 @@ modify :: State s `Member` es => (s -> s) -> Eff ef es ()
 modify f = get >>= put . f
 
 runState :: s -> Eff ef (State s : es) a -> Eff ef es (s, a)
-runState s = handle (pure . (s,)) $ elabState s
+runState s = handleWrapped sequenceA (s,) (elabState s)
 
-elabState :: s -> Handler (State s) ef es ((,) s)
-elabState s Get next = runState s $ next $ pure s
-elabState _ (Put s') next = runState s' $ next $ pure ()
+elabState :: s -> HandlerWrapped (State s) ef es ((,) s)
+elabState s Get continue = runState s $ continue $ pure s
+elabState _ (Put s') continue = runState s' $ continue $ pure ()
 
 execState :: s -> Eff ef (State s : es) a -> Eff ef es s
 execState s = fmap fst . runState s
@@ -34,11 +34,9 @@ evalState :: s -> Eff ef (State s : es) a -> Eff ef es a
 evalState s = fmap snd . runState s
 
 interposeState :: State s `Member` es => s -> Eff ef es a -> Eff ef es (s, a)
-interposeState s = interpose (pure . (s,)) $ elabStateInterpose s
-
-elabStateInterpose :: s -> IHandler (State s) ef es ((,) s)
-elabStateInterpose s Get next = interposeState s $ next $ pure s
-elabStateInterpose _ (Put s') next = interposeState s' $ next $ pure ()
+interposeState s = interposeWrapped sequenceA (s,) \cases
+  Get continue -> interposeState s $ continue $ pure s
+  (Put s') continue -> interposeState s' $ continue $ pure ()
 
 transactionally :: State s `Member` es => Eff ef es a -> Eff ef es a
 transactionally @s action = do

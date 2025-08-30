@@ -5,7 +5,6 @@ module Theseus.Effect.Choice where
 
 import Control.Applicative
 import Control.Monad
-import Control.Monad.Identity
 import Theseus.Eff
 
 data Choice :: Effect where
@@ -20,12 +19,10 @@ runChoice ::
   (Alternative f, Traversable f) =>
   Eff ef (Choice : es) a ->
   Eff ef es (f a)
-runChoice = handle (pure . pure) elabChoice
-
-elabChoice :: (Alternative f, Traversable f) => Handler Choice ef es f
-elabChoice Empty _ = pure empty
-elabChoice Choose next =
-  liftA2 (<|>) (runChoice $ next $ pure True) (runChoice $ next $ pure False)
+runChoice = handleWrapped sequenceA pure \cases
+  Empty _ -> pure empty
+  Choose continue ->
+    liftA2 (<|>) (runChoice $ continue $ pure True) (runChoice $ continue $ pure False)
 
 pauseChoice ::
   (Pausable into, Collect into `Member` es, Traversable wrap) =>
@@ -33,12 +30,6 @@ pauseChoice ::
   Eff ef (Choice : es) a ->
   Eff ef' (Choice : es') (wrap a)
 pauseChoice @into runners = unpause @into <=< fmap sequenceA . runners . collect @into
-
-reAltList :: Alternative alt => [a] -> alt a
-reAltList ls =
-  case ls of
-    [] -> empty
-    a : as -> pure a <|> reAltList as
 
 instance Alternative (Eff ef (Choice : es)) where
   empty = send Empty
@@ -54,10 +45,7 @@ collect :: Collect into `Member` es => Eff ef (Choice : es) a -> Eff ef es (into
 collect action = send $ Collect action
 
 runCollect :: (Alternative into, Traversable into) => Eff ef (Collect into : es) a -> Eff ef es a
-runCollect = fmap runIdentity . runCollectId
-
-runCollectId :: (Alternative into, Traversable into) => Eff ef (Collect into : es) a -> Eff ef es (Identity a)
-runCollectId = handle (pure . pure) \(Collect action) next -> runCollectId $ next $ runChoice action
+runCollect = handle \(Collect action) continue -> continue $ runChoice action
 
 class Applicative alt => Pausable alt where
   unpause :: alt a -> Eff ef (Choice : es) a

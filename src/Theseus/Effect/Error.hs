@@ -1,7 +1,6 @@
 module Theseus.Effect.Error where
 
 import Control.Monad (join)
-import Control.Monad.Identity
 import Theseus.Eff
 
 newtype Throw e m a where
@@ -17,27 +16,13 @@ catch :: Catch `Member` es => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> E
 catch action onThrow = send $ Catch action onThrow
 
 runCatch :: Eff ef (Catch : es) a -> Eff ef es a
-runCatch = fmap runIdentity . handle (pure . pure) elabCatch
-
-elabCatch :: Handler Catch ef es Identity
-elabCatch (Catch action onThrow) next = fmap Identity $ runCatch $ next $ runThrow action >>= either onThrow pure
+runCatch = handle \(Catch action onThrow) continue ->
+  continue $ runThrow action >>= either onThrow pure
 
 runThrow :: Eff ef (Throw e : es) a -> Eff ef es (Either e a)
-runThrow = handle (pure . pure) elabThrow
-
-elabThrow :: Handler (Throw e) ef es (Either e)
-elabThrow (Throw e) _ = pure $ Left e
+runThrow = handleWrapped sequenceA Right \(Throw e) _ -> pure $ Left e
 
 runCatchNoRecovery :: ef Maybe => Eff ef (Catch : es) a -> Eff ef es (Maybe a)
-runCatchNoRecovery = handleWoven (pure . Just) elabCatchNoRecovery
-
-elabCatchNoRecovery :: ef Maybe => HandlerWoven Catch ef es Maybe
-elabCatchNoRecovery (Catch action _) next = do
-  ran <- runCatchNoRecovery $ next $ runThrowNoRecovery action
+runCatchNoRecovery = handleRaw (fmap sequenceA) (pure . Just) \(Catch action _) continue -> do
+  ran <- runCatchNoRecovery $ continue $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
-
-runThrowNoRecovery :: Eff ef (Throw e : es) a -> Eff ef es (Maybe a)
-runThrowNoRecovery = handle (pure . Just) elabThrowNoRecovery
-
-elabThrowNoRecovery :: Handler (Throw e) ef es Maybe
-elabThrowNoRecovery (Throw _) _ = pure Nothing

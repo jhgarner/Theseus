@@ -7,6 +7,8 @@ module Theseus.Union (
 
 import Data.Kind (Type)
 
+-- An extremely slow open sum. The `c` parameter allows us to remember some
+-- facts about the data that were true when we constructed it.
 data Union (ls :: [(Type -> Type) -> Type -> Type]) c (m :: Type -> Type) (a :: Type) where
   This :: c eff => eff m a -> Union (eff : ls) c m a
   That :: Union ls c m a -> Union (eff : ls) c m a
@@ -30,6 +32,8 @@ instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other
 class InternalMember eff es => Member eff es where
   inj :: c eff => eff m a -> Union es c m a
 
+-- A Maybe that includes some extra facts in it. The facts (c) probably have
+-- something to do with the value stored inside (a).
 data FactfulMaybe c a where
   JustFact :: c => a -> FactfulMaybe c a
   NothingFact :: FactfulMaybe c a

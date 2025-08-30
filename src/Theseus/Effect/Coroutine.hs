@@ -13,7 +13,4 @@ data Status es a b c = Done c | Yielded a (b -> Eff Distributive (Coroutine a b 
   deriving (Functor)
 
 runCoroutine :: Eff Distributive (Coroutine a b : es) c -> Eff Distributive es (Status es a b c)
-runCoroutine = handle' (pure . Done) elabCoroutine
-
-elabCoroutine :: Handler (Coroutine a b) Distributive es (Status es a b)
-elabCoroutine (Yield a) next = pure $ Yielded a (next . pure)
+runCoroutine = handleWrapped distribute Done \(Yield a) next -> pure $ Yielded a (next . pure)

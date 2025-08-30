@@ -55,9 +55,12 @@ test-suite theseus-test
   import: shared
   other-modules:
     Choice
+    Coroutine
+    Error
     Reader
     State
     Utils
+    Writer
 
   -- other-extensions:
   type: exitcode-stdio-1.0

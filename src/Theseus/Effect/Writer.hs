@@ -20,18 +20,26 @@ runWriter :: Monoid w => Eff ef (Writer w : es) a -> Eff ef es (w, a)
 runWriter = runWriterFrom mempty
 
 runWriterFrom :: Monoid w => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
-runWriterFrom w = handle (pure . (w,)) (elabWriter w)
+runWriterFrom start = handleWrapped sequenceA (start,) $ elabWriter runWriterFrom start
 
--- Writer is currently broken and I need to fix it. Interpose is easy to use
--- incorrectly.
-elabWriter :: Monoid w => w -> Handler (Writer w) ef es ((,) w)
-elabWriter start (Tell w) next = runWriterFrom (start <> w) $ next $ pure ()
+interposeWriter :: (Writer w `Member` es, Monoid w) => w -> Eff ef es a -> Eff ef es (w, a)
+interposeWriter start = interposeWrapped sequenceA (start,) $ elabWriter interposeWriter start
 
--- elabWriter start (Listen action) next = runWriterFrom start $ next do
---   (w, a) <- interpose (pure . (start,)) (elabWriter start) action
---   send $ Tell w
---   pure (w, a)
--- elabWriter start (Pass action) next = runWriterFrom start $ next do
---   (w, (f, a)) <- interpose (pure . (start,)) (elabWriter start) action
---   send $ Tell $ f w
---   pure a
+elabWriter ::
+  (Writer w `Member` es, Monoid w) =>
+  (w -> Eff ef' es' a -> r) ->
+  w ->
+  Writer w (Eff ef es) x ->
+  (Eff ef es x -> Eff ef' es' a) ->
+  r
+elabWriter return start (Tell w) next = return (start <> w) $ next $ pure ()
+elabWriter return start (Listen action) next =
+  return start $ next do
+    (w, a) <- interposeWriter mempty action
+    send $ Tell w
+    pure (w, a)
+elabWriter return start (Pass action) next =
+  return start $ next do
+    (w, (f, a)) <- interposeWriter mempty action
+    send $ Tell $ f w
+    pure a
