@@ -6,6 +6,7 @@ module Theseus.Eff (
   restrict,
   lift,
   raise,
+  raiseUnder,
   send,
   interpose,
   runEff,
@@ -97,6 +98,15 @@ raise (Eff act) = Eff \Facts -> case act Facts of
 raiseUnion :: Union es (FlipMember esSend) (Eff ef esSend) x -> Union (eff : es) (FlipMember esSend) (Eff ef esSend) x
 raiseUnion (This eff) = That (This eff)
 raiseUnion (That rest) = That $ raiseUnion rest
+
+raiseUnder :: forall eff2 eff1 ef es a. Eff ef (eff1 : es) a -> Eff ef (eff1 : eff2 : es) a
+raiseUnder (Eff act) = Eff \Facts -> case act Facts of
+  Pure a -> pure a
+  Impure eff next -> Impure (raiseUnionUnder eff) (raiseUnder . next)
+
+raiseUnionUnder :: Union (eff1 : es) (FlipMember esSend) (Eff ef esSend) x -> Union (eff1 : eff2 : es) (FlipMember esSend) (Eff ef esSend) x
+raiseUnionUnder (This eff) = This eff
+raiseUnionUnder (That rest) = That $ raiseUnion rest
 
 send :: eff `Member` es => eff (Eff ef es) a -> Eff ef es a
 send eff = Eff \Facts -> lift $ inj eff

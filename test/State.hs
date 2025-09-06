@@ -40,12 +40,12 @@ testState = do
                 throw s
             \s -> pure $ "caught " ++ s
       it "rolls back on empty alternative" do
-        ("s", [] @String) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("s", [] @String) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           transactionally @String do
             put "newS"
             empty
       it "keeps branches separate" do
-        ("b", ["s -> a test a", "s -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("b", ["s -> a test a", "s -> b test b"]) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           prefix <- transactionally @String do
             s <- pure "a" <|> pure "b"
             startedWith <- get
@@ -54,7 +54,7 @@ testState = do
           suffix <- get
           pure $ prefix ++ " test " ++ suffix
       it "rolls back failed branches" do
-        ("b", ["s -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("b", ["s -> b test b"]) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           prefix <- transactionally @String do
             s <- pure "a" <|> pure "b"
             startedWith <- get
@@ -63,7 +63,7 @@ testState = do
           suffix <- get
           pure $ prefix ++ " test " ++ suffix
       it "can join together multiple branches" do
-        ("b", ["s -> a test b", "a -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("b", ["s -> a test b", "a -> b test b"]) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           prefix <- transactionally @String $ unpauseM @[] $ collect do
             s <- pure "a" <|> pure "b"
             startedWith <- get
@@ -72,7 +72,7 @@ testState = do
           suffix <- get
           pure $ prefix ++ " test " ++ suffix
       it "does not roll back if only one branch fails when pausing" do
-        ("b", ["a -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("b", ["a -> b test b"]) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           prefix <- transactionally @String $ unpauseM @[] $ collect do
             s <- pure "a" <|> pure "b"
             startedWith <- get
@@ -81,7 +81,7 @@ testState = do
           suffix <- get
           pure $ prefix ++ " test " ++ suffix
       it "rolls back if all the branches fail when pausing" do
-        ("s", []) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("s", []) === runEffDist $ runState "s" $ runCollect @[] $ collect do
           prefix <- transactionally @String $ unpauseM @[] $ collect do
             s <- pure "a" <|> pure "b"
             startedWith <- get
