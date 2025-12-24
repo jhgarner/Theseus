@@ -1,6 +1,11 @@
+{-# LANGUAGE QuantifiedConstraints #-}
+
 module Theseus.Effect.Error where
 
 import Control.Monad (join)
+import Control.Monad.Identity
+import Data.Functor
+import Theseus.ControlFlow
 import Theseus.Eff
 
 newtype Throw e m a where
@@ -10,19 +15,35 @@ throw :: Throw e `Member` es => e -> Eff ef es a
 throw = send . Throw
 
 data Catch m a where
-  Catch :: Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Catch (Eff ef es) a
+  Catch :: ef (Either e) => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Catch (Eff ef es) a
 
-catch :: Catch `Member` es => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Eff ef es a
+catch :: (Catch `Member` es, ef (Either e)) => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Eff ef es a
 catch action onThrow = send $ Catch action onThrow
 
-runCatch :: Eff ef (Catch : es) a -> Eff ef es a
+runCatch :: ef Identity => Eff ef (Catch : es) a -> Eff ef es a
 runCatch = handle \(Catch action onThrow) continue ->
   continue $ runThrow action >>= either onThrow pure
 
-runThrow :: Eff ef (Throw e : es) a -> Eff ef es (Either e a)
-runThrow = handleWrapped sequenceA Right \(Throw e) _ -> pure $ Left e
+runThrow :: ef (Either e) => Eff ef (Throw e : es) a -> Eff ef es (Either e a)
+runThrow = handleRaw (pure . pure) \(Throw e) next -> fmap takeFirstError $ runThrow $ finishThrown $ next $ Thrown e (pure ())
 
-runCatchNoRecovery :: ef Maybe => Eff ef (Catch : es) a -> Eff ef es (Maybe a)
-runCatchNoRecovery = handleRaw (fmap sequenceA) (pure . Just) \(Catch action _) continue -> do
-  ran <- runCatchNoRecovery $ continue $ either (const Nothing) Just <$> runThrow action
+takeFirstError :: Either e e -> Either e a
+takeFirstError (Left a) = Left a
+takeFirstError (Right a) = Left a
+
+runCatchNoRecovery :: (ef Maybe, forall w. Traversable w => ef w) => Eff Traversable (Catch : es) a -> Eff ef es (Maybe a)
+runCatchNoRecovery = handleRaw (pure . pure) \(Catch action _) continue -> do
+  ran <- runCatchNoRecovery $ runMaybeCf $ continue $ MaybeCf $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
+
+data Thrown e eff f a = Thrown {getThrown :: e, finalizers :: f ()}
+  deriving (Functor)
+
+finishThrown :: Functor f => Thrown e eff f a -> f e
+finishThrown (Thrown e finalizers) = finalizers $> e
+
+instance ControlFlow (Thrown e) Boring where
+  Thrown e f `cfApply` _ = Thrown e f
+  Thrown e f `cfBind` _ = Thrown e f
+  cfMap _ handler (Thrown e f) = Thrown e $ handler f
+  cfRun _ handler (Thrown e f) = Thrown e $ handler f $> ()

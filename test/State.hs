@@ -40,52 +40,27 @@ testState = do
                 throw s
             \s -> pure $ "caught " ++ s
       it "rolls back on empty alternative" do
-        ("s", [] @String) === runEff $ runState "s" $ runCollect @[] $ collect do
+        ("s", [] @String) === runEff $ runState "s" $ runCollect $ collect do
           transactionally @String do
             put "newS"
             empty
-      it "keeps branches separate" do
-        ("b", ["s -> a test a", "s -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
-          prefix <- transactionally @String do
-            s <- pure "a" <|> pure "b"
-            startedWith <- get
-            put s
-            pure $ startedWith ++ " -> " ++ s
-          suffix <- get
-          pure $ prefix ++ " test " ++ suffix
-      it "rolls back failed branches" do
-        ("b", ["s -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
-          prefix <- transactionally @String do
-            s <- pure "a" <|> pure "b"
-            startedWith <- get
-            put s
-            if s == "a" then empty else pure $ startedWith ++ " -> " ++ s
-          suffix <- get
-          pure $ prefix ++ " test " ++ suffix
-      it "can join together multiple branches" do
-        ("b", ["s -> a test b", "a -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
-          prefix <- transactionally @String $ unpauseM @[] $ collect do
-            s <- pure "a" <|> pure "b"
-            startedWith <- get
-            put s
-            pure $ startedWith ++ " -> " ++ s
-          suffix <- get
-          pure $ prefix ++ " test " ++ suffix
-      it "does not roll back if only one branch fails when pausing" do
-        ("b", ["a -> b test b"]) === runEff $ runState "s" $ runCollect @[] $ collect do
-          prefix <- transactionally @String $ unpauseM @[] $ collect do
-            s <- pure "a" <|> pure "b"
-            startedWith <- get
-            put s
-            if s == "a" then empty else pure $ startedWith ++ " -> " ++ s
-          suffix <- get
-          pure $ prefix ++ " test " ++ suffix
-      it "rolls back if all the branches fail when pausing" do
-        ("s", []) === runEff $ runState "s" $ runCollect @[] $ collect do
-          prefix <- transactionally @String $ unpauseM @[] $ collect do
-            s <- pure "a" <|> pure "b"
-            startedWith <- get
-            put s
-            if s == "a" || s == "b" then empty else pure $ startedWith ++ " -> " ++ s
-          suffix <- get
-          pure $ prefix ++ " test " ++ suffix
+
+-- TODO transactionally no longer does these things and I think that's fine. It breaks the local reasoning if it worked.
+-- it "keeps branches separate" do
+--   ("b", ["s -> a test a", "s -> b test b"]) === runEff $ runState "s" $ runCollect $ collect do
+--     prefix <- transactionally @String do
+--       s <- pure "a" <|> pure "b"
+--       startedWith <- get
+--       put s
+--       pure $ startedWith ++ " -> " ++ s
+--     suffix <- get
+--     pure $ prefix ++ " test " ++ suffix
+-- it "rolls back failed branches" do
+--   ("b", ["s -> b test b"]) === runEff $ runState "s" $ runCollect $ collect do
+--     prefix <- transactionally @String do
+--       s <- pure "a" <|> pure "b"
+--       startedWith <- get
+--       put s
+--       if s == "a" then empty else pure $ startedWith ++ " -> " ++ s
+--     suffix <- get
+--     pure $ prefix ++ " test " ++ suffix

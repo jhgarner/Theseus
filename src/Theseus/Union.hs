@@ -1,8 +1,12 @@
+{-# LANGUAGE DeepSubsumption #-}
+
 module Theseus.Union (
   Union (This, That),
-  Member (inj),
+  Member (inj, getProof),
   prj,
   FactfulMaybe (JustFact, NothingFact),
+  IsMember (IsMember, Deeper),
+  withProof,
 ) where
 
 import Data.Kind (Type)
@@ -16,6 +20,7 @@ data Union (ls :: [(Type -> Type) -> Type -> Type]) c (m :: Type -> Type) (a :: 
 class InternalMember eff ls where
   internalInj :: c eff => eff m a -> Union ls c m a
   internalPrj :: Union ls c m a -> FactfulMaybe (c eff) (eff m a)
+  internalGetProof :: IsMember eff ls
 
 instance InternalMember eff (eff : es) where
   internalInj = This
@@ -23,14 +28,27 @@ instance InternalMember eff (eff : es) where
   internalPrj (This eff) = JustFact eff
   internalPrj (That _) = NothingFact
 
-instance {-# OVERLAPPABLE #-} InternalMember eff es => InternalMember eff (other : es) where
+  internalGetProof = IsMember id
+
+instance {-# INCOHERENT #-} InternalMember eff es => InternalMember eff (other : es) where
   internalInj eff = That $ internalInj eff
 
   internalPrj (This _) = NothingFact
   internalPrj (That rest) = internalPrj rest
 
+  internalGetProof = Deeper getProof
+
 class InternalMember eff es => Member eff es where
   inj :: c eff => eff m a -> Union es c m a
+  getProof :: eff `IsMember` es
+
+data IsMember eff es where
+  IsMember :: (forall x. (eff `Member` es => x) -> x) -> IsMember eff es
+  Deeper :: eff `IsMember` es -> IsMember eff (other : es)
+
+withProof :: IsMember eff es -> (eff `Member` es => x) -> x
+withProof (IsMember f) x = f x
+withProof (Deeper more) x = withProof more x
 
 -- A Maybe that includes some extra facts in it. The facts (c) probably have
 -- something to do with the value stored inside (a).
@@ -43,3 +61,4 @@ prj = internalPrj
 
 instance InternalMember eff es => Member eff es where
   inj = internalInj
+  getProof = internalGetProof

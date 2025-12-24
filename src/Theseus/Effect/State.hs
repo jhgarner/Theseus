@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 
 module Theseus.Effect.State where
 
@@ -20,25 +21,32 @@ put = send . Put
 modify :: State s `Member` es => (s -> s) -> Eff ef es ()
 modify f = get >>= put . f
 
-runState :: s -> Eff ef (State s : es) a -> Eff ef es (s, a)
-runState s = handleWrapped sequenceA (s,) (elabState s)
+withState :: State s `Member` es => Eff ef es a -> Eff ef es (s, a)
+withState eff = do
+  a <- eff
+  s' <- get
+  pure (s', a)
 
-elabState :: s -> HandlerWrapped (State s) ef es ((,) s)
-elabState s Get continue = runState s $ continue $ pure s
-elabState _ (Put s') continue = runState s' $ continue $ pure ()
+type StateResult s = ((,) s)
 
-execState :: s -> Eff ef (State s : es) a -> Eff ef es s
-execState s = fmap fst . runState s
+evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
+evalState s =
+  handleWrapped (s,) \cases
+    Get continue -> evalState s $ continue $ pure s
+    (Put s') continue -> evalState s' $ continue $ pure ()
 
-evalState :: s -> Eff ef (State s : es) a -> Eff ef es a
-evalState s = fmap snd . runState s
+execState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es s
+execState s eff = fst <$> evalState s eff
 
-interposeState :: State s `Member` es => s -> Eff ef es a -> Eff ef es (s, a)
-interposeState s = interposeWrapped sequenceA (s,) \cases
+runState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
+runState = evalState
+
+interposeState :: (ef (StateResult s), State s `Member` es) => s -> Eff ef es a -> Eff ef es (s, a)
+interposeState s = interposeWrapped (s,) \cases
   Get continue -> interposeState s $ continue $ pure s
   (Put s') continue -> interposeState s' $ continue $ pure ()
 
-transactionally :: State s `Member` es => Eff ef es a -> Eff ef es a
+transactionally :: (State s `Member` es, ef (StateResult s)) => Eff ef es a -> Eff ef es a
 transactionally @s action = do
   initial <- get @s
   (newS, a) <- interposeState initial action

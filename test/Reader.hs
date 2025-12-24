@@ -25,7 +25,7 @@ testReader = do
         ("test", "test") === runEff $ runReaderNoLocal "test" do
           local (++ " local") $ liftA2 (,) ask ask
       it "composes well with coroutines when you swap out the ask" do
-        ("first local", "second local") === runEffDist $ do
+        ("first local", "second local") === runEff $ do
           rest <- runReader "first" $ yieldCoroutine do
             local (++ " local") do
               firstAsk <- ask
@@ -35,7 +35,7 @@ testReader = do
           runReader "second" $ doneCoroutine rest
       it "composes poorly when you try to swap local while local is running" do
         -- You could argue that ("first local", "second") would be more correct
-        ("first local", "second local") === runEffDist $ do
+        ("first local", "second local") === runEff $ do
           rest <- runReader "first" $ yieldCoroutine do
             local (++ " local") do
               firstAsk <- ask
@@ -44,7 +44,7 @@ testReader = do
               pure (firstAsk, lastAsk)
           runReaderNoLocal "second" $ doneCoroutine rest
       it "picks up the new local implementation after the current local finishes" do
-        ("first local", "second local", "second") === runEffDist $ do
+        ("first local", "second local", "second") === runEff $ do
           rest <- runReader "first" $ yieldCoroutine do
             (first, second) <- local (++ " local") do
               firstAsk <- ask

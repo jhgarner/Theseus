@@ -3,18 +3,16 @@
 module Theseus.Effect.IO where
 
 import Control.Monad.IO.Class
-import Control.Monad.Identity
+import Theseus.ControlFlow
 import Theseus.Eff
-import Theseus.Union
 
 data EIO m a where
   LiftIO :: IO a -> EIO m a
 
 runEffIO :: Eff Boring '[EIO] a -> IO a
-runEffIO (Eff act) = case act Facts of
-  Pure a -> pure a
-  Impure (This (LiftIO io)) next -> io >>= runEffIO . fmap runIdentity . next . pure . pure
-  Impure (That union) _ -> case union of {}
+runEffIO =
+  runEff . handleRaw (pure . pure) \(LiftIO ioa) continue ->
+    pure $ runEffIO =<< getComposeCf (continue $ ComposeCf $ fmap pure ioa)
 
 instance EIO `Member` es => MonadIO (Eff ef es) where
   liftIO = send . LiftIO

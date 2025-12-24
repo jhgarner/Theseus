@@ -4,26 +4,28 @@ import Theseus.Eff
 
 data Writer w :: Effect where
   Tell :: w -> Writer w m ()
-  Listen :: Eff ef es a -> Writer w (Eff ef es) (w, a)
-  Pass :: Eff ef es (w -> w, a) -> Writer w (Eff ef es) a
+  Listen :: ef (WriterResult w) => Eff ef es a -> Writer w (Eff ef es) (w, a)
+  Pass :: ef (WriterResult w) => Eff ef es (w -> w, a) -> Writer w (Eff ef es) a
 
 tell :: Writer w `Member` es => w -> Eff ef es ()
 tell w = send $ Tell w
 
-listen :: Writer w `Member` es => Eff ef es a -> Eff ef es (w, a)
+listen :: Writer w `Member` es => ef (WriterResult w) => Eff ef es a -> Eff ef es (w, a)
 listen action = send $ Listen action
 
-pass :: Writer w `Member` es => Eff ef es (w -> w, a) -> Eff ef es a
+pass :: Writer w `Member` es => ef (WriterResult w) => Eff ef es (w -> w, a) -> Eff ef es a
 pass action = send $ Pass action
 
-runWriter :: Monoid w => Eff ef (Writer w : es) a -> Eff ef es (w, a)
+runWriter :: (ef (WriterResult w), Monoid w) => Eff ef (Writer w : es) a -> Eff ef es (w, a)
 runWriter = runWriterFrom mempty
 
-runWriterFrom :: Monoid w => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
-runWriterFrom start = handleWrapped sequenceA (start,) $ elabWriter runWriterFrom start
+type WriterResult w = ((,) w)
 
-interposeWriter :: (Writer w `Member` es, Monoid w) => w -> Eff ef es a -> Eff ef es (w, a)
-interposeWriter start = interposeWrapped sequenceA (start,) $ elabWriter interposeWriter start
+runWriterFrom :: (ef (WriterResult w), Monoid w) => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
+runWriterFrom start = handleWrapped (start,) $ elabWriter runWriterFrom start
+
+interposeWriter :: (ef (WriterResult w), Writer w `Member` es, Monoid w) => w -> Eff ef es a -> Eff ef es (w, a)
+interposeWriter start = interposeWrapped (start,) $ elabWriter interposeWriter start
 
 elabWriter ::
   (Writer w `Member` es, Monoid w) =>

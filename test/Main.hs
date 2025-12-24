@@ -1,4 +1,5 @@
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -8,6 +9,7 @@ import Choice (testChoice)
 import Control.Monad.IO.Class
 import Coroutine (testCoroutine)
 import Error (testError)
+import FileExample (testFileExample)
 import Reader (testReader)
 import State (testState)
 import System.IO.Temp
@@ -26,6 +28,8 @@ main = hspec do
     it "should handle IO actions correctly" do
       "test" === runEffIO $ liftIO do
         writeSystemTempFile "test.txt" "test" >>= readFile
+  it "File Example" do
+    testFileExample
 
   testReader
   testChoice

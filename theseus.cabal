@@ -22,9 +22,14 @@ common shared
 
   build-depends:
     base ^>=4.21.0.0,
+    constraints,
     distributive,
+    functor-combinators,
     mtl,
+    pointed,
     selective,
+    semigroupoids,
+    transformers,
     unliftio-core,
 
   default-extensions:
@@ -37,7 +42,9 @@ common shared
 library
   import: shared
   exposed-modules:
+    Theseus.ControlFlow
     Theseus.Eff
+    Theseus.EffType
     Theseus.Effect.Choice
     Theseus.Effect.Coroutine
     Theseus.Effect.Error
@@ -61,6 +68,7 @@ test-suite theseus-test
     State
     Utils
     Writer
+    FileExample
 
   -- other-extensions:
   type: exitcode-stdio-1.0

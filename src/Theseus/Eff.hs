@@ -1,236 +1,179 @@
+{-# LANGUAGE QuantifiedConstraints #-}
+
 module Theseus.Eff (
   Eff (Eff),
+  ControlFlow (..),
+  Boring,
+  Implies (..),
+  implying,
   Effect,
-  ExtraFacts,
+  -- ExtraFacts,
   Freer (Pure, Impure),
-  restrict,
+  unrestrictEff,
+  unrestrict,
   lift,
   raise,
   send,
-  interpose,
   runEff,
   BasicFacts (Facts),
-  runEffDist,
+  -- runEffDist,
   Member,
   Handler,
   handle,
+  handleFinally,
   HandlerWrapped,
   handleWrapped,
   HandlerRaw,
   handleRaw,
   IHandler,
+  interpose,
   IHandlerWrapped,
   interposeWrapped,
   IHandlerRaw,
   interposeRaw,
-  Boring,
 ) where
 
 import Control.Monad.Identity
-import Control.Monad.Reader (ReaderT (ReaderT))
-import Data.Distributive (Distributive)
-import Data.Kind (Constraint, Type)
+import Data.Functor
+import Theseus.ControlFlow (IdentityCf (IdentityCf, runIdentityCf))
+import Theseus.EffType
 import Theseus.Union
-
-newtype Eff (ef :: ExtraFacts) (es :: [Effect]) a = Eff {unEff :: BasicFacts ef -> Freer ef es a}
-  deriving (Functor)
-  deriving (Applicative, Monad) via (ReaderT (BasicFacts ef) (Freer ef es))
-
--- Things about the ef variable on Eff that must be true in order for Eff to be
--- runnable. We can construct an Eff where these are false, but we won't be able
--- to run it.
-data BasicFacts ef where
-  Facts :: ef Identity => BasicFacts ef
-
-type Effect = (Type -> Type) -> Type -> Type
-
-type ExtraFacts = (Type -> Type) -> Constraint
-
-class eff `Member` es => FlipMember es eff
-instance eff `Member` es => FlipMember es eff
-
-data Freer :: ExtraFacts -> [Effect] -> Type -> Type where
-  Pure :: a -> Freer ef es a
-  Impure ::
-    efSend Identity =>
-    (Union es (FlipMember esSend) (Eff efSend esSend) x) ->
-    -- TODO Traversable is required for Freer to be a Monad. Either Traversable
-    -- or Applicative is required for Freer to be Applicative. I wonder if I can
-    -- do something interesting with that. Are there interesting Applicatives I
-    -- might want to use as `g` which would allow parallelizable computations?
-    -- It would be nice to remove Applicative in cases where I want to pass
-    -- `Const` as `g`. That helps you implement effects that aren't scoped.
-    (forall g. (ef g, Traversable g, Applicative g) => Eff efSend esSend (g x) -> Eff ef es (g a)) ->
-    Freer ef es a
-
-deriving instance Functor (Freer ef es)
-
-instance Applicative (Freer ef es) where
-  pure = Pure
-
-  Pure f <*> rhs = fmap f rhs
-  Impure eff next <*> m = Impure eff \x -> fmap sequenceA (next x) <*> Eff (const m)
-
-instance Monad (Freer ef es) where
-  Pure ma >>= fmb = fmb ma
-  Impure eff next >>= fmb = Impure eff \x -> do
-    after <- next x
-    let rhs = traverse fmb after
-    Eff $ const rhs
-
--- TODO I'd like this to be more generic and have a really easy way of
--- controlling which constraints you requer. That type of type level programming
--- is a rabbit hole I didn't want to jump into yet.
-restrict :: Eff Boring es a -> Eff Distributive es a
-restrict (Eff act) = Eff \Facts -> case act Facts of
-  Pure a -> Pure a
-  Impure eff next -> Impure eff (restrict . next)
-
-lift :: ef Identity => Union es (FlipMember es) (Eff ef es) a -> Freer ef es a
-lift f = Impure f id
-
-raise :: forall eff ef es a. Eff ef es a -> Eff ef (eff : es) a
-raise (Eff act) = Eff \Facts -> case act Facts of
-  Pure a -> pure a
-  Impure eff next -> Impure (raiseUnion eff) (raise . next)
-
-raiseUnion :: Union es (FlipMember esSend) (Eff ef esSend) x -> Union (eff : es) (FlipMember esSend) (Eff ef esSend) x
-raiseUnion (This eff) = That (This eff)
-raiseUnion (That rest) = That $ raiseUnion rest
-
-send :: eff `Member` es => eff (Eff ef es) a -> Eff ef es a
-send eff = Eff \Facts -> lift $ inj eff
 
 type Handler eff ef es =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` esSend) =>
+    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es a
   )
 
-distId :: Functor g => Identity (g a) -> g (Identity a)
-distId (Identity ga) = fmap Identity ga
-
 handle ::
   forall eff ef es a.
+  ef Identity =>
   Handler eff ef es ->
   Eff ef (eff : es) a ->
   Eff ef es a
 handle f =
   fmap runIdentity . handleRaw
-    (fmap distId)
     (pure . Identity)
-    \eff next -> fmap Identity $ f eff $ handle f . fmap runIdentity . next . fmap Identity
+    \eff next -> fmap Identity $ f eff $ handle f . runIdentityCf . next . IdentityCf
+
+handleFinally ::
+  forall eff ef es a.
+  ef Identity =>
+  Eff ef es () ->
+  Handler eff ef es ->
+  Eff ef (eff : es) a ->
+  Eff ef es a
+handleFinally finally f =
+  fmap runIdentity . handleRaw
+    (\a -> finally $> Identity a)
+    \eff next -> fmap Identity $ f eff $ handleFinally finally f . runIdentityCf . next . IdentityCf
 
 type HandlerWrapped eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` esSend) =>
+    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef (eff : es) a) ->
     Eff ef es (wrap a)
   )
 
 handleWrapped ::
-  (forall a g. (ef g, Traversable g, Applicative g) => wrap (g a) -> g (wrap a)) ->
-  (forall a. a -> wrap a) ->
+  ef wrap =>
+  (forall x. x -> wrap x) ->
   HandlerWrapped eff ef es wrap ->
   Eff ef (eff : es) a ->
   Eff ef es (wrap a)
-handleWrapped threading ret f =
-  handleRaw
-    (fmap threading)
-    (pure . ret)
-    \eff next -> f eff $ fmap runIdentity . next . fmap Identity
+handleWrapped @_ wrap f =
+  handleRaw (pure . wrap) \eff next -> f eff $ runIdentityCf . next . IdentityCf
 
 type HandlerRaw eff ef es wrap =
   ( forall a esSend efSend x.
-    (ef Identity, efSend Identity, eff `Member` esSend) =>
+    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
-    (forall g. (ef g, Traversable g, Applicative g) => Eff efSend esSend (g x) -> Eff ef (eff : es) (g a)) ->
+    (forall cf someEf. (ControlFlow cf someEf, forall f. ef f => someEf f) => cf eff (Eff efSend esSend) x -> cf eff (Eff ef (eff : es)) a) ->
     Eff ef es (wrap a)
   )
 
+unrestrictEff :: forall newEf ef es a. (forall a. ef a => newEf a) => Eff ef es a -> Eff newEf es a
+unrestrictEff (Eff act) = Eff \Facts -> unrestrict $ act Facts
+
+unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Freer ef es a -> Freer newEf es a
+unrestrict (Pure a) = Pure a
+unrestrict (Impure eff continue) = Impure eff \member -> withProof member (cfMap implying unrestrictEff) . continue member
+
 handleRaw ::
-  forall a wrap eff ef es.
-  (forall g a. (ef g, Traversable g, Applicative g) => Eff ef es (wrap (g a)) -> Eff ef es (g (wrap a))) ->
-  (forall a. a -> Eff ef es (wrap a)) ->
+  forall a wrap eff ef es outEf.
+  (outEf wrap, forall w. ef w => outEf w) =>
+  (forall x. x -> Eff outEf es (wrap x)) ->
   HandlerRaw eff ef es wrap ->
   Eff ef (eff : es) a ->
-  Eff ef es (wrap a)
-handleRaw threading ret f (Eff act) = Eff $ \Facts -> case act Facts of
-  Pure a -> unEff (ret a) Facts
-  Impure (This e) next -> unEff (f e next) Facts
-  Impure (That rest) next -> Impure rest $ threading . handleRaw threading ret f . next
+  Eff outEf es (wrap a)
+handleRaw wrap f (Eff act) = Eff \Facts -> case act Facts of
+  Pure a -> unEff (wrap a) Facts
+  Impure (This e) next -> unrestrict $ unEff (f e (next getProof)) Facts
+  Impure (That rest) next -> Impure rest \member x -> withProof member (cfRun implying (handleRaw wrap f)) $ next (Deeper member) x
 
 type IHandler eff ef es =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` es, eff `Member` esSend) =>
+    (eff `Member` es, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es a
   )
 
-interpose :: eff `Member` es => IHandler eff ef es -> Eff ef es a -> Eff ef es a
+interpose :: (eff `Member` es, ef Identity) => IHandler eff ef es -> Eff ef es a -> Eff ef es a
 interpose f =
   fmap runIdentity
     . interposeRaw
-      (fmap distId)
-      (pure . Identity)
-      \eff continue -> Identity <$> f eff (interpose f . fmap runIdentity . continue . fmap Identity)
+      pure
+      \eff continue -> Identity <$> f eff (interpose f . runIdentityCf . continue . IdentityCf)
 
 type IHandlerWrapped eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` es, eff `Member` esSend) =>
+    (eff `Member` es, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es (wrap a)
   )
 
 interposeWrapped ::
-  eff `Member` es =>
-  (forall g a. (ef g, Traversable g, Applicative g) => wrap (g a) -> g (wrap a)) ->
-  (forall a. a -> wrap a) ->
+  (eff `Member` es, ef wrap) =>
+  (forall x. x -> wrap x) ->
   IHandlerWrapped eff ef es wrap ->
   Eff ef es a ->
   Eff ef es (wrap a)
-interposeWrapped threading ret f =
+interposeWrapped ret f =
   interposeRaw
-    (fmap threading)
-    (pure . ret)
-    \eff continue -> f eff (fmap runIdentity . continue . fmap Identity)
+    ret
+    \eff continue -> f eff (runIdentityCf . continue . IdentityCf)
 
 type IHandlerRaw eff ef es wrap =
   ( forall esSend efSend x a.
-    (ef Identity, efSend Identity, eff `Member` es, eff `Member` esSend) =>
+    (eff `Member` es, eff `Member` esSend) =>
     eff (Eff efSend esSend) x ->
-    (forall g. (ef g, Traversable g, Applicative g) => Eff efSend esSend (g x) -> Eff ef es (g a)) ->
+    (forall cf someEf. (ControlFlow cf someEf, forall a. ef a => someEf a) => cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->
     Eff ef es (wrap a)
   )
 
 interposeRaw ::
-  eff `Member` es =>
-  (forall g a. (ef g, Traversable g, Applicative g) => Eff ef es (wrap (g a)) -> Eff ef es (g (wrap a))) ->
-  (forall a. a -> Eff ef es (wrap a)) ->
+  (eff `Member` es, outEf wrap, forall w. ef w => outEf w) =>
+  (forall x. x -> wrap x) ->
   IHandlerRaw eff ef es wrap ->
   Eff ef es a ->
-  Eff ef es (wrap a)
-interposeRaw threading ret f (Eff act) = Eff \Facts -> case act Facts of
-  Pure a -> unEff (ret a) Facts
+  Eff outEf es (wrap a)
+interposeRaw ret f (Eff act) = Eff \Facts -> case act Facts of
+  Pure a -> unEff (pure $ ret a) Facts
   Impure union next -> case prj union of
-    JustFact eff -> unEff (f eff next) Facts
-    NothingFact -> Impure union (threading . interposeRaw threading ret f . next)
+    JustFact eff -> unrestrict $ unEff (f eff (next getProof)) Facts
+    NothingFact -> Impure union \member -> withProof member (cfRun implying (interposeRaw ret f)) . next member
 
 runEff :: Eff Boring '[] a -> a
 runEff (Eff act) = case act Facts of
   Pure a -> a
   Impure a _ -> case a of {}
 
-runEffDist :: Eff Distributive '[] a -> a
-runEffDist (Eff act) = case act Facts of
-  Pure a -> a
-  Impure a _ -> case a of {}
-
-class Boring (f :: Type -> Type)
-
-instance Boring f
+-- runEffDist :: Eff m '[] a -> a
+-- runEffDist (Eff act) = case act Facts of
+--   Pure a -> a
+--   Impure a _ -> case a of {}
