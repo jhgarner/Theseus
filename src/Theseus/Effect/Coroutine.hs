@@ -10,7 +10,7 @@ yield :: forall a b ef es. Coroutine a b `Member` es => a -> Eff ef es b
 yield a = send $ Yield a
 
 runCoroutine :: forall a b c ef es. ef (Status ef es a b) => Eff ef (Coroutine a b : es) c -> Eff ef es (Status ef es a b c)
-runCoroutine = handleRaw (pure . Done) \(Yield a) next ->
+runCoroutine = handleRaw (pure . Done) \(Yield a) _ next ->
   case next $ Yielding pure of
     Yielding yielding -> pure $ Yielded a yielding
 

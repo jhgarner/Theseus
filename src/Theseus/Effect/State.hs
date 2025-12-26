@@ -32,8 +32,8 @@ type StateResult s = ((,) s)
 evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
 evalState s =
   handleWrapped (s,) \cases
-    Get continue -> evalState s $ continue $ pure s
-    (Put s') continue -> evalState s' $ continue $ pure ()
+    Get _ continue -> evalState s $ continue $ pure s
+    (Put s') _ continue -> evalState s' $ continue $ pure ()
 
 execState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es s
 execState s eff = fst <$> evalState s eff
@@ -43,8 +43,8 @@ runState = evalState
 
 interposeState :: (ef (StateResult s), State s `Member` es) => s -> Eff ef es a -> Eff ef es (s, a)
 interposeState s = interposeWrapped (s,) \cases
-  Get continue -> interposeState s $ continue $ pure s
-  (Put s') continue -> interposeState s' $ continue $ pure ()
+  Get _ continue -> interposeState s $ continue $ pure s
+  (Put s') _ continue -> interposeState s' $ continue $ pure ()
 
 transactionally :: (State s `Member` es, ef (StateResult s)) => Eff ef es a -> Eff ef es a
 transactionally @s action = do

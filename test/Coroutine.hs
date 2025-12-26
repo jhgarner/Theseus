@@ -106,13 +106,13 @@ act :: Simple `Member` es => Eff ef es String
 act = send Act
 
 runSimple :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es a
-runSimple s = handle \Act continue -> continue $ pure s
+runSimple s = handle \Act _ continue -> continue $ pure s
 
 data SimpleH :: Effect where
   ActH :: Simple `Member` es => Eff ef es String -> SimpleH (Eff ef es) String
 
 runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
-runSimpleH s = handle \(ActH action) continue -> continue $ fmap (++ s) action
+runSimpleH s = handle \(ActH action) _ continue -> continue $ fmap (++ s) action
 
 runSimpleHWrapping :: Simple `Member` es => ef SHW => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
 runSimpleHWrapping s = handleWrapped (SHW "" "") (elabSimpleHWrapping s)
@@ -121,7 +121,7 @@ data SHW a = SHW String String a
   deriving (Functor, Foldable, Traversable, Eq, Show)
 
 elabSimpleHWrapping :: ef SHW => Simple `Member` es => (forall ef es. Simple `Member` es => Eff ef es String) -> HandlerWrapped SimpleH ef es SHW
-elabSimpleHWrapping s (ActH action) next = do
+elabSimpleHWrapping s (ActH action) _ next = do
   fo <- s
   SHW fr sr result <- runSimpleHWrapping s $ next do
     fi <- s

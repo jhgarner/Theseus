@@ -18,6 +18,7 @@ module Theseus.Eff (
   BasicFacts (Facts),
   -- runEffDist,
   Member,
+  Sender,
   Handler,
   handle,
   handleFinally,
@@ -35,14 +36,15 @@ module Theseus.Eff (
 
 import Control.Monad.Identity
 import Data.Functor
-import Theseus.ControlFlow (IdentityCf (IdentityCf, runIdentityCf))
 import Theseus.EffType
 import Theseus.Union
 
+type Sender es esSend = (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
+
 type Handler eff ef es =
   ( forall esSend efSend x a.
-    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
+    Sender (eff : es) esSend ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es a
   )
@@ -56,7 +58,7 @@ handle ::
 handle f =
   fmap runIdentity . handleRaw
     (pure . Identity)
-    \eff next -> fmap Identity $ f eff $ handle f . runIdentityCf . next . IdentityCf
+    \eff sender next -> fmap Identity $ f eff sender $ handle f . runIdentityCf . next . IdentityCf
 
 handleFinally ::
   forall eff ef es a.
@@ -68,12 +70,12 @@ handleFinally ::
 handleFinally finally f =
   fmap runIdentity . handleRaw
     (\a -> finally $> Identity a)
-    \eff next -> fmap Identity $ f eff $ handleFinally finally f . runIdentityCf . next . IdentityCf
+    \eff sender next -> fmap Identity $ f eff sender $ handleFinally finally f . runIdentityCf . next . IdentityCf
 
 type HandlerWrapped eff ef es wrap =
   ( forall esSend efSend x a.
-    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
+    Sender (eff : es) esSend ->
     (Eff efSend esSend x -> Eff ef (eff : es) a) ->
     Eff ef es (wrap a)
   )
@@ -85,13 +87,13 @@ handleWrapped ::
   Eff ef (eff : es) a ->
   Eff ef es (wrap a)
 handleWrapped @_ wrap f =
-  handleRaw (pure . wrap) \eff next -> f eff $ runIdentityCf . next . IdentityCf
+  handleRaw (pure . wrap) \eff sender next -> f eff sender $ runIdentityCf . next . IdentityCf
 
-type HandlerRaw eff ef es wrap =
+type HandlerRaw eff ef es cf wrap =
   ( forall a esSend efSend x.
-    eff `Member` esSend =>
     eff (Eff efSend esSend) x ->
-    (forall cf someEf. (ControlFlow cf someEf, forall f. ef f => someEf f) => cf eff (Eff efSend esSend) x -> cf eff (Eff ef (eff : es)) a) ->
+    Sender (eff : es) esSend ->
+    (cf eff (Eff efSend esSend) x -> cf eff (Eff ef (eff : es)) a) ->
     Eff ef es (wrap a)
   )
 
@@ -100,24 +102,29 @@ unrestrictEff (Eff act) = Eff \Facts -> unrestrict $ act Facts
 
 unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Freer ef es a -> Freer newEf es a
 unrestrict (Pure a) = Pure a
-unrestrict (Impure eff continue) = Impure eff \member -> withProof member (cfMap implying unrestrictEff) . continue member
+unrestrict (Impure eff lift continue) = Impure eff lift \member -> withProof member (cfMap implying unrestrictEff) . continue member
 
 handleRaw ::
-  forall a wrap eff ef es outEf.
-  (outEf wrap, forall w. ef w => outEf w) =>
+  forall a wrap eff ef es outEf cf someEf.
+  (outEf wrap, forall w. ef w => outEf w, ControlFlow cf someEf, (forall f. ef f => someEf f)) =>
   (forall x. x -> Eff outEf es (wrap x)) ->
-  HandlerRaw eff ef es wrap ->
+  HandlerRaw eff ef es cf wrap ->
   Eff ef (eff : es) a ->
   Eff outEf es (wrap a)
 handleRaw wrap f (Eff act) = Eff \Facts -> case act Facts of
   Pure a -> unEff (wrap a) Facts
-  Impure (This e) next -> unrestrict $ unEff (f e (next getProof)) Facts
-  Impure (That rest) next -> Impure rest \member x -> withProof member (cfRun implying (handleRaw wrap f)) $ next (Deeper member) x
+  Impure (This e) lifter next -> unrestrict $ unEff (f e (liftIt lifter) (next getProof)) Facts
+  Impure (That rest) lifter next -> Impure rest (lifter . Deeper) \member x ->
+    withProof member (cfRun implying (handleRaw wrap f)) $ next (Deeper member) x
+
+liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
+liftIt f = withProof (f $ IsMember \x -> x)
 
 type IHandler eff ef es =
   ( forall esSend efSend x a.
-    (eff `Member` es, eff `Member` esSend) =>
+    eff `Member` es =>
     eff (Eff efSend esSend) x ->
+    Sender es esSend ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es a
   )
@@ -127,12 +134,13 @@ interpose f =
   fmap runIdentity
     . interposeRaw
       pure
-      \eff continue -> Identity <$> f eff (interpose f . runIdentityCf . continue . IdentityCf)
+      \eff sender continue -> Identity <$> f eff sender (interpose f . runIdentityCf . continue . IdentityCf)
 
 type IHandlerWrapped eff ef es wrap =
   ( forall esSend efSend x a.
-    (eff `Member` es, eff `Member` esSend) =>
+    eff `Member` es =>
     eff (Eff efSend esSend) x ->
+    Sender es esSend ->
     (Eff efSend esSend x -> Eff ef es a) ->
     Eff ef es (wrap a)
   )
@@ -146,12 +154,13 @@ interposeWrapped ::
 interposeWrapped ret f =
   interposeRaw
     ret
-    \eff continue -> f eff (runIdentityCf . continue . IdentityCf)
+    \eff sender continue -> f eff sender (runIdentityCf . continue . IdentityCf)
 
 type IHandlerRaw eff ef es wrap =
   ( forall esSend efSend x a.
-    (eff `Member` es, eff `Member` esSend) =>
+    eff `Member` es =>
     eff (Eff efSend esSend) x ->
+    Sender es esSend ->
     (forall cf someEf. (ControlFlow cf someEf, forall a. ef a => someEf a) => cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->
     Eff ef es (wrap a)
   )
@@ -164,16 +173,20 @@ interposeRaw ::
   Eff outEf es (wrap a)
 interposeRaw ret f (Eff act) = Eff \Facts -> case act Facts of
   Pure a -> unEff (pure $ ret a) Facts
-  Impure union next -> case prj union of
-    JustFact eff -> unrestrict $ unEff (f eff (next getProof)) Facts
-    NothingFact -> Impure union \member -> withProof member (cfRun implying (interposeRaw ret f)) . next member
+  Impure union lifter next -> case prj union of
+    Just eff -> unrestrict $ unEff (f eff (liftIt lifter) (next getProof)) Facts
+    Nothing -> Impure union lifter \member -> withProof member (cfRun implying (interposeRaw ret f)) . next member
 
 runEff :: Eff Boring '[] a -> a
 runEff (Eff act) = case act Facts of
   Pure a -> a
-  Impure a _ -> case a of {}
+  Impure a _ _ -> case a of {}
 
--- runEffDist :: Eff m '[] a -> a
--- runEffDist (Eff act) = case act Facts of
---   Pure a -> a
---   Impure a _ -> case a of {}
+newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
+  deriving (Functor)
+
+instance ControlFlow IdentityCf Boring where
+  IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
+  IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
+  cfMap _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa
+  cfRun _ handler (IdentityCf fa) = IdentityCf $ handler fa

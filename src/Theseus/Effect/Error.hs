@@ -5,7 +5,6 @@ module Theseus.Effect.Error where
 import Control.Monad (join)
 import Control.Monad.Identity
 import Data.Functor
-import Theseus.ControlFlow
 import Theseus.Eff
 
 newtype Throw e m a where
@@ -21,18 +20,18 @@ catch :: (Catch `Member` es, ef (Either e)) => Eff ef (Throw e : es) a -> (e -> 
 catch action onThrow = send $ Catch action onThrow
 
 runCatch :: ef Identity => Eff ef (Catch : es) a -> Eff ef es a
-runCatch = handle \(Catch action onThrow) continue ->
+runCatch = handle \(Catch action onThrow) _ continue ->
   continue $ runThrow action >>= either onThrow pure
 
 runThrow :: ef (Either e) => Eff ef (Throw e : es) a -> Eff ef es (Either e a)
-runThrow = handleRaw (pure . pure) \(Throw e) next -> fmap takeFirstError $ runThrow $ finishThrown $ next $ Thrown e (pure ())
+runThrow = handleRaw (pure . pure) \(Throw e) _ next -> fmap takeFirstError $ runThrow $ finishThrown $ next $ Thrown e (pure ())
 
 takeFirstError :: Either e e -> Either e a
 takeFirstError (Left a) = Left a
 takeFirstError (Right a) = Left a
 
 runCatchNoRecovery :: (ef Maybe, forall w. Traversable w => ef w) => Eff Traversable (Catch : es) a -> Eff ef es (Maybe a)
-runCatchNoRecovery = handleRaw (pure . pure) \(Catch action _) continue -> do
+runCatchNoRecovery = handleRaw (pure . pure) \(Catch action _) _ continue -> do
   ran <- runCatchNoRecovery $ runMaybeCf $ continue $ MaybeCf $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
 
@@ -47,3 +46,12 @@ instance ControlFlow (Thrown e) Boring where
   Thrown e f `cfBind` _ = Thrown e f
   cfMap _ handler (Thrown e f) = Thrown e $ handler f
   cfRun _ handler (Thrown e f) = Thrown e $ handler f $> ()
+
+newtype MaybeCf eff f a = MaybeCf {runMaybeCf :: f (Maybe a)}
+  deriving (Functor)
+
+instance ControlFlow MaybeCf Traversable where
+  MaybeCf fmab `cfApply` fa = MaybeCf $ (\mab a -> fmap ($ a) mab) <$> fmab <*> fa
+  MaybeCf fma `cfBind` afb = MaybeCf $ fma >>= traverse afb
+  cfMap _ efToOut (MaybeCf fa) = MaybeCf $ efToOut fa
+  cfRun _ handler (MaybeCf fa) = MaybeCf $ sequenceA <$> handler fa

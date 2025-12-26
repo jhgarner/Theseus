@@ -1,5 +1,3 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE DeepSubsumption #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -8,7 +6,6 @@ module Theseus.Effect.Choice where
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Identity
-import Theseus.ControlFlow ()
 import Theseus.Eff
 
 data Many eff m a where
@@ -37,14 +34,14 @@ runChoice ::
   Eff Traversable (Choice : es) a ->
   Eff ef es [a]
 runChoice = handleRaw (pure . pure) \cases
-  Empty next ->
+  Empty _ next ->
     case next $ Many implying (pure []) pure of
       Many travProof start go ->
         join <$> runChoice do
           inits <- start
           results <- traverse (poseChoice travProof . go) inits
           pure $ join results
-  Choose next ->
+  Choose _ next ->
     case next $ Many implying (pure [True, False]) pure of
       Many travProof start go ->
         join <$> runChoice do
@@ -58,10 +55,10 @@ poseChoice ::
   Eff ef es a ->
   Eff ef es [a]
 poseChoice (Implies traversable) = interposeRaw pure \cases
-  Empty next ->
+  Empty _ next ->
     case traversable $ next $ Many implying (pure []) pure of
       many -> runMany many
-  Choose next ->
+  Choose _ next ->
     case traversable $ next $ Many implying (pure [True, False]) pure of
       many -> runMany many
 
@@ -86,4 +83,4 @@ collect :: Collect `Member` es => (forall w. Traversable w => ef w) => Eff Trave
 collect action = send $ Collect action
 
 runCollect :: ef Identity => Eff ef (Collect : es) a -> Eff ef es a
-runCollect = handle \(Collect action) continue -> continue $ runChoice action
+runCollect = handle \(Collect action) _ continue -> continue $ runChoice action

@@ -42,7 +42,6 @@ common shared
 library
   import: shared
   exposed-modules:
-    Theseus.ControlFlow
     Theseus.Eff
     Theseus.EffType
     Theseus.Effect.Choice

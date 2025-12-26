@@ -28,20 +28,21 @@ interposeWriter :: (ef (WriterResult w), Writer w `Member` es, Monoid w) => w ->
 interposeWriter start = interposeWrapped (start,) $ elabWriter interposeWriter start
 
 elabWriter ::
-  (Writer w `Member` es, Monoid w) =>
+  (Monoid w, Writer w `Member` es') =>
   (w -> Eff ef' es' a -> r) ->
   w ->
   Writer w (Eff ef es) x ->
+  Sender es' es ->
   (Eff ef es x -> Eff ef' es' a) ->
   r
-elabWriter return start (Tell w) next = return (start <> w) $ next $ pure ()
-elabWriter return start (Listen action) next =
+elabWriter return start (Tell w) _ next = return (start <> w) $ next $ pure ()
+elabWriter @w return start (Listen action) sender next =
   return start $ next do
-    (w, a) <- interposeWriter mempty action
-    send $ Tell w
+    (w, a) <- sender @(Writer w) interposeWriter mempty action
+    sender @(Writer w) send $ Tell w
     pure (w, a)
-elabWriter return start (Pass action) next =
+elabWriter @w return start (Pass action) sender next =
   return start $ next do
-    (w, (f, a)) <- interposeWriter mempty action
-    send $ Tell $ f w
+    (w, (f, a)) <- sender @(Writer w) interposeWriter mempty action
+    sender @(Writer w) send $ Tell $ f w
     pure a

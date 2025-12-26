@@ -43,18 +43,15 @@ testFileExample = void $ runEffIO $ runCollect $ collect $ runFS $ do
 newtype Handle fs = Handle String -- Pretend like there's real data here
 
 data FS :: Effect where
-  -- TODO it's a problem that I have to lead implementation details (the EIO
-  -- requirement) in this effect signature. That's a reasonably large problem.
-  -- Also everything involving `ef` is gross.
-  WithFile :: (ef Identity, EIO `Member` es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> FS (Eff ef es) a
+  WithFile :: ef Identity => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> FS (Eff ef es) a
 
 withFile :: (FS `Member` es, EIO `Member` es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
 withFile s action = send $ WithFile s action
 
 runFS :: (EIO `Member` es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
-runFS = handle \(WithFile file action) continue -> do
+runFS = handle \(WithFile file action) sender continue -> do
   liftIO $ putStrLn $ "Opening file " ++ file
-  continue $ runFile file action
+  continue $ sender @EIO (runFile file action)
 
 data File fs :: Effect where
   ReadHandle :: Handle fs -> File fs m String
@@ -71,9 +68,9 @@ runFile name act = handleFinally closeFile handle $ act $ Handle name
  where
   closeFile = liftIO $ putStrLn $ "closing " ++ name ++ " now"
   handle :: EIO `Member` es => Handler (File fs) ef es
-  handle (ReadHandle (Handle name)) continue = do
+  handle (ReadHandle (Handle name)) _ continue = do
     liftIO $ putStrLn $ "I'm reading from " ++ name
     continue $ pure "Pretend like I'm doing real IO"
-  handle (WriteHandle (Handle name) contents) continue = do
+  handle (WriteHandle (Handle name) contents) _ continue = do
     liftIO $ putStrLn $ "I'm writing " ++ show contents ++ " to " ++ name
     continue $ pure ()
