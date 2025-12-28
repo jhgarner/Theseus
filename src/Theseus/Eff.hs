@@ -1,5 +1,11 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 
+-- Since I'm doing scary things with foralls and constraints, The "use id"
+-- HLint only works when DeepSubsumption is turned on. In this module, enabling
+-- DeepSubsumption causes a ton of code to stop compiling, so I'm ignoring the
+-- lint.
+{- HLINT ignore "Use id" -}
+
 module Theseus.Eff (
   Eff (Eff),
   ControlFlow (..),
@@ -7,7 +13,6 @@ module Theseus.Eff (
   Implies (..),
   implying,
   Effect,
-  -- ExtraFacts,
   Freer (Pure, Impure),
   unrestrictEff,
   unrestrict,
@@ -15,8 +20,6 @@ module Theseus.Eff (
   raise,
   send,
   runEff,
-  BasicFacts (Facts),
-  -- runEffDist,
   Member,
   Sender,
   Handler,
@@ -98,7 +101,7 @@ type HandlerRaw eff ef es cf wrap =
   )
 
 unrestrictEff :: forall newEf ef es a. (forall a. ef a => newEf a) => Eff ef es a -> Eff newEf es a
-unrestrictEff (Eff act) = Eff \Facts -> unrestrict $ act Facts
+unrestrictEff (Eff act) = Eff $ unrestrict act
 
 unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Freer ef es a -> Freer newEf es a
 unrestrict (Pure a) = Pure a
@@ -111,10 +114,10 @@ handleRaw ::
   HandlerRaw eff ef es cf wrap ->
   Eff ef (eff : es) a ->
   Eff outEf es (wrap a)
-handleRaw wrap f (Eff act) = Eff \Facts -> case act Facts of
-  Pure a -> unEff (wrap a) Facts
-  Impure (This e) lifter next -> unrestrict $ unEff (f e (liftIt lifter) (next getProof)) Facts
-  Impure (That rest) lifter next -> Impure rest (lifter . Deeper) \member x ->
+handleRaw wrap f (Eff act) = case act of
+  Pure a -> wrap a
+  Impure (This e) lifter next -> unrestrictEff $ f e (liftIt lifter) (next getProof)
+  Impure (That rest) lifter next -> Eff $ Impure rest (lifter . Deeper) \member x ->
     withProof member (cfRun implying (handleRaw wrap f)) $ next (Deeper member) x
 
 liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
@@ -171,14 +174,15 @@ interposeRaw ::
   IHandlerRaw eff ef es wrap ->
   Eff ef es a ->
   Eff outEf es (wrap a)
-interposeRaw ret f (Eff act) = Eff \Facts -> case act Facts of
-  Pure a -> unEff (pure $ ret a) Facts
+interposeRaw ret f (Eff act) = case act of
+  Pure a -> pure $ ret a
   Impure union lifter next -> case prj union of
-    Just eff -> unrestrict $ unEff (f eff (liftIt lifter) (next getProof)) Facts
-    Nothing -> Impure union lifter \member -> withProof member (cfRun implying (interposeRaw ret f)) . next member
+    Just eff -> unrestrictEff $ f eff (liftIt lifter) (next getProof)
+    Nothing -> Eff $ Impure union lifter \member ->
+      withProof member (cfRun implying (interposeRaw ret f)) . next member
 
 runEff :: Eff Boring '[] a -> a
-runEff (Eff act) = case act Facts of
+runEff (Eff act) = case act of
   Pure a -> a
   Impure a _ _ -> case a of {}
 

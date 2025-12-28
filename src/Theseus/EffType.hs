@@ -5,8 +5,6 @@
 
 module Theseus.EffType where
 
-import Control.Monad.Identity
-import Data.Functor.Combinator
 import Data.Kind (Constraint, Type)
 import Theseus.Union
 
@@ -29,7 +27,7 @@ data ef `Implies` c where
 implying :: (forall w. ef w => c w) => ef `Implies` c
 implying = Implies id
 
-class (forall eff f. Functor f => Functor (cf eff f), r Identity) => ControlFlow cf r | cf -> r where
+class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -> r where
   cfApply :: Applicative f => cf eff f (a -> b) -> f a -> cf eff f b
   cfBind :: Monad f => cf eff f a -> (a -> f b) -> cf eff f b
   cfMap ::
@@ -45,13 +43,8 @@ class (forall eff f. Functor f => Functor (cf eff f), r Identity) => ControlFlow
     cf eff (Eff ef es) a ->
     cf eff (Eff outEf outEs) (w a)
 
-newtype Eff (ef :: Out) (es :: [Effect]) a = Eff {unEff :: BasicFacts ef -> Freer ef es a}
-  deriving (Functor)
-  deriving (Applicative, Monad) via ReaderT (BasicFacts ef) (Freer ef es)
-
--- TODO Figure out how to remove this (and ideally the ef variable) by tracking something else.
-data BasicFacts ef where
-  Facts :: BasicFacts ef
+newtype Eff (ef :: Out) (es :: [Effect]) a = Eff {unEff :: Freer ef es a}
+  deriving (Functor, Applicative, Monad)
 
 type Effect = (Type -> Type) -> Type -> Type
 
@@ -79,17 +72,17 @@ instance Applicative (Freer ef es) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff lift next <*> m = Impure eff lift \member x -> next member x `cfApply` Eff (const m)
+  Impure eff lift next <*> m = Impure eff lift \member x -> next member x `cfApply` Eff m
 
 instance Monad (Freer ef es) where
   Pure ma >>= fmb = fmb ma
-  Impure eff lift next >>= fmb = Impure eff lift \member x -> next member x `cfBind` (Eff . const . fmb)
+  Impure eff lift next >>= fmb = Impure eff lift \member x -> next member x `cfBind` (Eff . fmb)
 
 lift :: Union es (Eff ef es) a -> Freer ef es a
 lift f = Impure f id \_ x -> x
 
 raise :: forall eff ef es a. Eff ef es a -> Eff ef (eff : es) a
-raise (Eff act) = Eff \Facts -> case act Facts of
+raise (Eff act) = Eff case act of
   Pure a -> pure a
   Impure eff lifter next -> Impure
     (raiseUnion eff)
@@ -98,6 +91,7 @@ raise (Eff act) = Eff \Facts -> case act Facts of
         IsMember _ -> error "Raise can't use eff"
     )
     $ \case
+      {- HLINT ignore "Avoid lambda" -}
       Deeper member -> \x -> withProof member $ cfMap implying raise $ next member x
       -- Why is this impossible? When we raise a value, we know for certain that
       -- it's unused by the computation that's getting raised. That means any
@@ -121,4 +115,4 @@ raiseUnion (This eff) = That (This eff)
 raiseUnion (That rest) = That $ raiseUnion rest
 
 send :: eff `Member` es => eff (Eff ef es) a -> Eff ef es a
-send eff = Eff \Facts -> lift $ inj eff
+send eff = Eff $ lift $ inj eff
