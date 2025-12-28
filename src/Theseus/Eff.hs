@@ -9,7 +9,7 @@
 module Theseus.Eff (
   Eff (Eff),
   ControlFlow (..),
-  Boring,
+  Anything,
   Implies (..),
   implying,
   Effect,
@@ -181,7 +181,7 @@ interposeRaw ret f (Eff act) = case act of
     Nothing -> Eff $ Impure union lifter \member ->
       withProof member (cfRun implying (interposeRaw ret f)) . next member
 
-runEff :: Eff Boring '[] a -> a
+runEff :: Eff Anything '[] a -> a
 runEff (Eff act) = case act of
   Pure a -> a
   Impure a _ _ -> case a of {}
@@ -189,7 +189,7 @@ runEff (Eff act) = case act of
 newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
   deriving (Functor)
 
-instance ControlFlow IdentityCf Boring where
+instance ControlFlow IdentityCf Anything where
   IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
   IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
   cfMap _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa

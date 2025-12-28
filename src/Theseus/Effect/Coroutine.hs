@@ -20,7 +20,7 @@ data Status ef es a b c = Done c | Yielded a (b -> Eff ef (Coroutine a b : es) c
 newtype Yielding b eff m c = Yielding {yielded :: b -> m c}
   deriving (Functor)
 
-instance ControlFlow (Yielding b) Boring where
+instance ControlFlow (Yielding b) Anything where
   Yielding bmc `cfApply` fa = Yielding \b -> bmc b <*> fa
   Yielding bmc `cfBind` afb = Yielding $ bmc >=> afb
   cfMap _ handler (Yielding bmc) = Yielding $ handler . bmc

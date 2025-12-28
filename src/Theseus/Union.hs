@@ -28,6 +28,10 @@ instance InternalMember eff (eff : es) where
 
   internalGetProof = IsMember id
 
+-- Incoherent because we want the compiler to pick this instance whenever it's
+-- not certain what @eff@ is. Once an implementation is chosen on the stack, we
+-- do not want to switch to another implementation that happens to handle the
+-- same effect. That would make reasoning about code locally much harder.
 instance {-# INCOHERENT #-} InternalMember eff es => InternalMember eff (other : es) where
   internalInj eff = That $ internalInj eff
 
@@ -36,6 +40,10 @@ instance {-# INCOHERENT #-} InternalMember eff es => InternalMember eff (other :
 
   internalGetProof = Deeper getProof
 
+-- | Proof that some effect is part of the effect stack and will be handled.
+-- You probably won't use the functions in this class yourself. Instead, you'll
+-- need to carry around this constraint to satisfy functions like `send` and
+-- `interpose`
 class InternalMember eff es => Member eff es where
   inj :: eff m a -> Union es m a
   getProof :: eff `IsMember` es

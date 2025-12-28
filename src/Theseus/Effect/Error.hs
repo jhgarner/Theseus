@@ -41,7 +41,7 @@ data Thrown e eff f a = Thrown {getThrown :: e, finalizers :: f ()}
 finishThrown :: Functor f => Thrown e eff f a -> f e
 finishThrown (Thrown e finalizers) = finalizers $> e
 
-instance ControlFlow (Thrown e) Boring where
+instance ControlFlow (Thrown e) Anything where
   Thrown e f `cfApply` _ = Thrown e f
   Thrown e f `cfBind` _ = Thrown e f
   cfMap _ handler (Thrown e f) = Thrown e $ handler f
