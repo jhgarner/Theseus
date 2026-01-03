@@ -10,10 +10,12 @@ yield :: forall a b ef es. Coroutine a b `Member` es => a -> Eff ef es b
 yield a = send $ Yield a
 
 runCoroutine :: forall a b c ef es. ef (Status ef es a b) => Eff ef (Coroutine a b : es) c -> Eff ef es (Status ef es a b c)
-runCoroutine = handleRaw (pure . Done) \(Yield a) _ next ->
+runCoroutine = interpretRaw (pure . Done) \(Yield a) _ next ->
   case next $ Yielding pure of
     Yielding yielding -> pure $ Yielded a yielding
 
+-- | It is essential that the function provided by `Yielded` be used exactly
+-- once. Otherwise you'll get confusing semantics within your code.
 data Status ef es a b c = Done c | Yielded a (b -> Eff ef (Coroutine a b : es) c)
   deriving (Functor)
 

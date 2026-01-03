@@ -1,6 +1,8 @@
 {-# LANGUAGE DeepSubsumption #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Theseus.Union (
+  Effect,
   Union (This, That),
   Member (inj, getProof),
   prj,
@@ -8,10 +10,14 @@ module Theseus.Union (
   withProof,
 ) where
 
-import Data.Kind (Type)
+import Data.Kind (Constraint, Type)
+
+-- | An Effect is a GADT whose first parameter will be @Eff ef es@ and whose
+-- second parameter will be the return type.
+type Effect = (Type -> Type) -> Type -> Type
 
 -- An extremely slow open sum.
-data Union (ls :: [(Type -> Type) -> Type -> Type]) (m :: Type -> Type) (a :: Type) where
+data Union (ls :: [Effect]) (m :: Type -> Type) (a :: Type) where
   This :: eff m a -> Union (eff : ls) m a
   That :: Union ls m a -> Union (eff : ls) m a
 
@@ -49,7 +55,7 @@ class InternalMember eff es => Member eff es where
   getProof :: eff `IsMember` es
 
 data IsMember eff es where
-  IsMember :: (forall x. (eff `Member` es => x) -> x) -> IsMember eff es
+  IsMember :: (forall x. (eff `Member` (eff : es) => x) -> x) -> IsMember eff (eff : es)
   Deeper :: eff `IsMember` es -> IsMember eff (other : es)
 
 withProof :: IsMember eff es -> (eff `Member` es => x) -> x
@@ -62,3 +68,7 @@ prj = internalPrj
 instance InternalMember eff es => Member eff es where
   inj = internalInj
   getProof = internalGetProof
+
+type family Members (effs :: [Effect]) (es :: [Effect]) :: Constraint where
+  Members '[] _ = ()
+  Members (a : as) es = (a `Member` es, Members as es)

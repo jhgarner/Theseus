@@ -86,10 +86,6 @@ instance Anything f
 newtype Eff (ef :: Out) (es :: [Effect]) a = Eff {unEff :: Freer ef es a}
   deriving (Functor, Applicative, Monad)
 
--- | An Effect is a GADT whose first parameter will be @Eff ef es@ and whose
--- second parameter will be the return type.
-type Effect = (Type -> Type) -> Type -> Type
-
 -- | A constraint on how handlers can manipulate return types. `Anything` and
 -- `Traversable` are common.
 type Out = (Type -> Type) -> Constraint
@@ -160,6 +156,24 @@ raise (Eff act) = Eff case act of
 raiseUnion :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
 raiseUnion (This eff) = That (This eff)
 raiseUnion (That rest) = That $ raiseUnion rest
+
+raiseUnder :: forall e eff ef es a. Eff ef (eff : es) a -> Eff ef (eff : e : es) a
+raiseUnder (Eff (Pure a)) = Eff $ pure a
+raiseUnder (Eff (Impure @_ @_ @esSend eff lifter next)) = Eff $ Impure (raiseUnderUnion eff) lifter' \case
+  IsMember _ -> cfMap implying raiseUnder . next getProof
+  Deeper (Deeper proof) -> \x -> withProof proof $ cfMap implying raiseUnder $ next (Deeper proof) x
+  Deeper (IsMember _) -> error "The raised value is not used"
+ where
+  lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)
+  lifter' l =
+    case l of
+      IsMember _ -> lifter getProof
+      Deeper (Deeper proof) -> lifter $ Deeper proof
+      Deeper (IsMember _) -> error "The raised value is not used"
+
+raiseUnderUnion :: Union (eff : es) (Eff efSend esSend) x -> Union (eff : e : es) (Eff efSend esSend) x
+raiseUnderUnion (This eff) = This eff
+raiseUnderUnion (That rest) = That $ That rest
 
 -- | Perform an effect as long as it will be handled somewhere up the stack.
 send :: eff `Member` es => eff (Eff ef es) a -> Eff ef es a

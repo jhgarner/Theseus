@@ -33,7 +33,7 @@ runChoice ::
   (forall w. Traversable w => ef w) =>
   Eff Traversable (Choice : es) a ->
   Eff ef es [a]
-runChoice = handleRaw (pure . pure) \cases
+runChoice = interpretRaw (pure . pure) \cases
   Empty _ next ->
     case next $ Many implying (pure []) pure of
       Many travProof start go ->
@@ -83,4 +83,4 @@ collect :: Collect `Member` es => (forall w. Traversable w => ef w) => Eff Trave
 collect action = send $ Collect action
 
 runCollect :: ef Identity => Eff ef (Collect : es) a -> Eff ef es a
-runCollect = handle \(Collect action) _ continue -> continue $ runChoice action
+runCollect = interpret \_ (Collect action) -> pure $ runChoice action

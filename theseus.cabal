@@ -31,6 +31,7 @@ common shared
     semigroupoids,
     transformers,
     unliftio-core,
+    template-haskell,
 
   default-extensions:
     BlockArguments
@@ -44,11 +45,14 @@ library
   exposed-modules:
     Theseus.Eff
     Theseus.EffType
+    Theseus.Interpreters
     Theseus.Effect.Choice
     Theseus.Effect.Coroutine
     Theseus.Effect.Error
     Theseus.Effect.IO
     Theseus.Effect.Reader
+    Theseus.Effect.Input
+    Theseus.Effect.Output
     Theseus.Effect.State
     Theseus.Effect.Writer
     Theseus.Union
@@ -68,6 +72,8 @@ test-suite theseus-test
     Utils
     Writer
     FileExample
+    Interpreting
+    Terminal
 
   -- other-extensions:
   type: exitcode-stdio-1.0

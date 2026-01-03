@@ -21,28 +21,28 @@ runWriter = runWriterFrom mempty
 
 type WriterResult w = ((,) w)
 
-runWriterFrom :: (ef (WriterResult w), Monoid w) => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
-runWriterFrom start = handleWrapped (start,) $ elabWriter runWriterFrom start
+runWriterFrom :: (Monoid w, ef (WriterResult w)) => w -> Eff ef (Writer w : es) a -> Eff ef es (w, a)
+runWriterFrom @w start = interpretW (start,) $ \sender eff ->
+  pure (sender @(Writer w) elabWriter eff, runWriterFrom $ start <> told eff)
 
-interposeWriter :: (ef (WriterResult w), Writer w `Member` es, Monoid w) => w -> Eff ef es a -> Eff ef es (w, a)
-interposeWriter start = interposeWrapped (start,) $ elabWriter interposeWriter start
+interposeWriter :: (Monoid w, ef (WriterResult w), Writer w `Member` es) => w -> Eff ef es a -> Eff ef es (w, a)
+interposeWriter @w start = interposeWrapped (start,) \eff sender next ->
+  interposeWriter (start <> told eff) $ next $ sender @(Writer w) elabWriter eff
 
 elabWriter ::
-  (Monoid w, Writer w `Member` es') =>
-  (w -> Eff ef' es' a -> r) ->
-  w ->
+  (Monoid w, Writer w `Member` es) =>
   Writer w (Eff ef es) x ->
-  Sender es' es ->
-  (Eff ef es x -> Eff ef' es' a) ->
-  r
-elabWriter return start (Tell w) _ next = return (start <> w) $ next $ pure ()
-elabWriter @w return start (Listen action) sender next =
-  return start $ next do
-    (w, a) <- sender @(Writer w) interposeWriter mempty action
-    sender @(Writer w) send $ Tell w
-    pure (w, a)
-elabWriter @w return start (Pass action) sender next =
-  return start $ next do
-    (w, (f, a)) <- sender @(Writer w) interposeWriter mempty action
-    sender @(Writer w) send $ Tell $ f w
-    pure a
+  Eff ef es x
+elabWriter (Tell _) = pure ()
+elabWriter (Listen action) = do
+  (w, a) <- interposeWriter mempty action
+  tell w
+  pure (w, a)
+elabWriter (Pass action) = do
+  (w, (f, a)) <- interposeWriter mempty action
+  tell $ f w
+  pure a
+
+told :: Monoid w => Writer w m x -> w
+told (Tell w) = w
+told _ = mempty

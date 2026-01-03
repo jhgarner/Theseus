@@ -10,9 +10,11 @@ import Control.Monad.IO.Class
 import Coroutine (testCoroutine)
 import Error (testError)
 import FileExample (testFileExample)
+import Interpreting (testInterprets)
 import Reader (testReader)
 import State (testState)
 import System.IO.Temp
+import Terminal (testFileThrice, testThrice)
 import Theseus.Eff
 import Theseus.Effect.IO
 import Utils
@@ -31,9 +33,12 @@ main = hspec do
   it "File Example" do
     testFileExample
 
+  testInterprets
   testReader
   testChoice
   testState
   testWriter
   testError
   testCoroutine
+  testThrice
+  testFileThrice

@@ -12,7 +12,7 @@ accomplishes this while also ensuring that semantics do not change when effects
 are reordered.
 
 We'll explore how, much like the Ship of Theseus, programs can be deconstructed
-and rebuilt while they run without losing their identity.
+and rebuilt without losing their identity.
 
 ## Goals
 

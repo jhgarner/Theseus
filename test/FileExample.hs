@@ -7,6 +7,7 @@ import Data.Functor
 import Theseus.Eff
 import Theseus.Effect.Choice
 import Theseus.Effect.IO
+import Theseus.Effect.Input
 
 -- This example shows something that most effect systems can't handle:
 -- combining higher order effects, rich control flow, and prompt resource
@@ -49,9 +50,9 @@ withFile :: (FS `Member` es, EIO `Member` es, ef Identity) => String -> (forall 
 withFile s action = send $ WithFile s action
 
 runFS :: (EIO `Member` es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
-runFS = handle \(WithFile file action) sender continue -> do
+runFS = interpret \sender (WithFile file action) -> do
   liftIO $ putStrLn $ "Opening file " ++ file
-  continue $ sender @EIO (runFile file action)
+  pure $ sender @EIO (runFile file action)
 
 data File fs :: Effect where
   ReadHandle :: Handle fs -> File fs m String
@@ -64,13 +65,16 @@ writeHandle :: File fs `Member` es => Handle fs -> String -> Eff ef es ()
 writeHandle handle s = send $ WriteHandle handle s
 
 runFile :: (ef Identity, EIO `Member` es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
-runFile name act = handleFinally closeFile handle $ act $ Handle name
+runFile name act = using (resource openFile closeFile) (interpret_ handle) $ act $ Handle name
  where
-  closeFile = liftIO $ putStrLn $ "closing " ++ name ++ " now"
-  handle :: EIO `Member` es => Handler (File fs) ef es
-  handle (ReadHandle (Handle name)) _ continue = do
+  openFile = do
+    liftIO $ putStrLn $ "opening " ++ name ++ " now"
+    pure $ Handle name
+  closeFile (Handle name) = liftIO $ putStrLn $ "closing " ++ name ++ " now"
+  handle :: EIO `Member` es => Handler_ (File fs) ef es
+  handle (ReadHandle (Handle name)) = do
     liftIO $ putStrLn $ "I'm reading from " ++ name
-    continue $ pure "Pretend like I'm doing real IO"
-  handle (WriteHandle (Handle name) contents) _ continue = do
+    pure "Pretend like I'm doing real IO"
+  handle (WriteHandle (Handle name) contents) = do
     liftIO $ putStrLn $ "I'm writing " ++ show contents ++ " to " ++ name
-    continue $ pure ()
+    pure ()

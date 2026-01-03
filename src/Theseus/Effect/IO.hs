@@ -10,7 +10,7 @@ data EIO m a where
 
 runEffIO :: Eff Anything '[EIO] a -> IO a
 runEffIO =
-  runEff . handleRaw (pure . pure) \(LiftIO ioa) _ continue ->
+  runEff . interpretRaw (pure . pure) \(LiftIO ioa) _ continue ->
     pure $ runEffIO =<< getComposeCf (continue $ ComposeCf $ fmap pure ioa)
 
 instance EIO `Member` es => MonadIO (Eff ef es) where

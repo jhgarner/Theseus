@@ -17,9 +17,9 @@ asks :: Reader r `Member` es => (r -> a) -> Eff ef es a
 asks f = fmap f ask
 
 runReader :: forall r ef es a. ef Identity => r -> Eff ef (Reader r : es) a -> Eff ef es a
-runReader r = handle \cases
-  Ask _ continue -> continue $ pure r
-  (Local f m) sender continue -> continue $ sender @(Reader r) $ interposeLocal f m
+runReader r = interpret \sender -> \case
+  Ask -> pure $ pure r
+  Local f m -> pure $ sender @(Reader r) $ interposeLocal f m
 
 interposeLocal :: (Reader r `Member` es, ef Identity) => (r -> r) -> Eff ef es a -> Eff ef es a
 interposeLocal @r f = interpose @(Reader r) \cases
@@ -30,8 +30,8 @@ interposeLocal @r f = interpose @(Reader r) \cases
 
 -- This is a version of Reader which completely ignores the function passed to
 -- local. It's pointless and you should never use it, but it illustrates one of
--- the challenges with Coroutine.
+-- the challenges with Coroutine.He's
 runReaderNoLocal :: ef Identity => r -> Eff ef (Reader r : es) a -> Eff ef es a
-runReaderNoLocal r = handle \cases
-  Ask _ next -> next $ pure r
-  (Local _ m) _ continue -> continue m
+runReaderNoLocal r = interpret \_ -> \case
+  Ask -> pure $ pure r
+  Local _ m -> pure m

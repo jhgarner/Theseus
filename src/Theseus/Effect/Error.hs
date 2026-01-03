@@ -20,18 +20,18 @@ catch :: (Catch `Member` es, ef (Either e)) => Eff ef (Throw e : es) a -> (e -> 
 catch action onThrow = send $ Catch action onThrow
 
 runCatch :: ef Identity => Eff ef (Catch : es) a -> Eff ef es a
-runCatch = handle \(Catch action onThrow) _ continue ->
-  continue $ runThrow action >>= either onThrow pure
+runCatch = interpret \_ (Catch action onThrow) ->
+  pure $ runThrow action >>= either onThrow pure
 
 runThrow :: ef (Either e) => Eff ef (Throw e : es) a -> Eff ef es (Either e a)
-runThrow = handleRaw (pure . pure) \(Throw e) _ next -> fmap takeFirstError $ runThrow $ finishThrown $ next $ Thrown e (pure ())
+runThrow = interpretRaw (pure . pure) \(Throw e) _ next -> fmap takeFirstError $ runThrow $ finishThrown $ next $ Thrown e (pure ())
 
 takeFirstError :: Either e e -> Either e a
 takeFirstError (Left a) = Left a
 takeFirstError (Right a) = Left a
 
 runCatchNoRecovery :: (ef Maybe, forall w. Traversable w => ef w) => Eff Traversable (Catch : es) a -> Eff ef es (Maybe a)
-runCatchNoRecovery = handleRaw (pure . pure) \(Catch action _) _ continue -> do
+runCatchNoRecovery = interpretRaw (pure . pure) \(Catch action _) _ continue -> do
   ran <- runCatchNoRecovery $ runMaybeCf $ continue $ MaybeCf $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
 

@@ -31,9 +31,9 @@ type StateResult s = ((,) s)
 
 evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
 evalState s =
-  handleWrapped (s,) \cases
-    Get _ continue -> evalState s $ continue $ pure s
-    (Put s') _ continue -> evalState s' $ continue $ pure ()
+  interpretW_ (s,) \case
+    Get -> pure (s, evalState s)
+    Put s' -> pure ((), evalState s')
 
 execState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es s
 execState s eff = fst <$> evalState s eff

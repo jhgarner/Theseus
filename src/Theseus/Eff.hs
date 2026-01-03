@@ -7,6 +7,13 @@
 {- HLINT ignore "Use id" -}
 
 module Theseus.Eff (
+  -- * Effects
+
+  -- | Theseus is an effect system library for Haskell. You define effects
+  -- locally using GADT syntax. For example,
+  -- @
+  --  data Terminal
+  -- @
   Eff (Eff),
   ControlFlow (..),
   Anything,
@@ -18,110 +25,37 @@ module Theseus.Eff (
   unrestrict,
   lift,
   raise,
+  raiseUnder,
+  Subset (raising),
   send,
   runEff,
   Member,
+  using,
+  with,
   Sender,
   Handler,
-  handle,
-  handleFinally,
-  HandlerWrapped,
-  handleWrapped,
+  interpret,
+  Handler_,
+  interpret_,
+  HandlerW,
+  interpretW,
+  HandlerW_,
+  interpretW_,
   HandlerRaw,
-  handleRaw,
+  interpretRaw,
   IHandler,
   interpose,
   IHandlerWrapped,
   interposeWrapped,
   IHandlerRaw,
   interposeRaw,
+  Identity,
 ) where
 
 import Control.Monad.Identity
-import Data.Functor
 import Theseus.EffType
+import Theseus.Interpreters
 import Theseus.Union
-
-type Sender es esSend = (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
-
-type Handler eff ef es =
-  ( forall esSend efSend x a.
-    eff (Eff efSend esSend) x ->
-    Sender (eff : es) esSend ->
-    (Eff efSend esSend x -> Eff ef es a) ->
-    Eff ef es a
-  )
-
-handle ::
-  forall eff ef es a.
-  ef Identity =>
-  Handler eff ef es ->
-  Eff ef (eff : es) a ->
-  Eff ef es a
-handle f =
-  fmap runIdentity . handleRaw
-    (pure . Identity)
-    \eff sender next -> fmap Identity $ f eff sender $ handle f . runIdentityCf . next . IdentityCf
-
-handleFinally ::
-  forall eff ef es a.
-  ef Identity =>
-  Eff ef es () ->
-  Handler eff ef es ->
-  Eff ef (eff : es) a ->
-  Eff ef es a
-handleFinally finally f =
-  fmap runIdentity . handleRaw
-    (\a -> finally $> Identity a)
-    \eff sender next -> fmap Identity $ f eff sender $ handleFinally finally f . runIdentityCf . next . IdentityCf
-
-type HandlerWrapped eff ef es wrap =
-  ( forall esSend efSend x a.
-    eff (Eff efSend esSend) x ->
-    Sender (eff : es) esSend ->
-    (Eff efSend esSend x -> Eff ef (eff : es) a) ->
-    Eff ef es (wrap a)
-  )
-
-handleWrapped ::
-  ef wrap =>
-  (forall x. x -> wrap x) ->
-  HandlerWrapped eff ef es wrap ->
-  Eff ef (eff : es) a ->
-  Eff ef es (wrap a)
-handleWrapped @_ wrap f =
-  handleRaw (pure . wrap) \eff sender next -> f eff sender $ runIdentityCf . next . IdentityCf
-
-type HandlerRaw eff ef es cf wrap =
-  ( forall a esSend efSend x.
-    eff (Eff efSend esSend) x ->
-    Sender (eff : es) esSend ->
-    (cf eff (Eff efSend esSend) x -> cf eff (Eff ef (eff : es)) a) ->
-    Eff ef es (wrap a)
-  )
-
-unrestrictEff :: forall newEf ef es a. (forall a. ef a => newEf a) => Eff ef es a -> Eff newEf es a
-unrestrictEff (Eff act) = Eff $ unrestrict act
-
-unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Freer ef es a -> Freer newEf es a
-unrestrict (Pure a) = Pure a
-unrestrict (Impure eff lift continue) = Impure eff lift \member -> withProof member (cfMap implying unrestrictEff) . continue member
-
-handleRaw ::
-  forall a wrap eff ef es outEf cf someEf.
-  (outEf wrap, forall w. ef w => outEf w, ControlFlow cf someEf, (forall f. ef f => someEf f)) =>
-  (forall x. x -> Eff outEf es (wrap x)) ->
-  HandlerRaw eff ef es cf wrap ->
-  Eff ef (eff : es) a ->
-  Eff outEf es (wrap a)
-handleRaw wrap f (Eff act) = case act of
-  Pure a -> wrap a
-  Impure (This e) lifter next -> unrestrictEff $ f e (liftIt lifter) (next getProof)
-  Impure (That rest) lifter next -> Eff $ Impure rest (lifter . Deeper) \member x ->
-    withProof member (cfRun implying (handleRaw wrap f)) $ next (Deeper member) x
-
-liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
-liftIt f = withProof (f $ IsMember \x -> x)
 
 type IHandler eff ef es =
   ( forall esSend efSend x a.
@@ -185,12 +119,3 @@ runEff :: Eff Anything '[] a -> a
 runEff (Eff act) = case act of
   Pure a -> a
   Impure a _ _ -> case a of {}
-
-newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
-  deriving (Functor)
-
-instance ControlFlow IdentityCf Anything where
-  IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
-  IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
-  cfMap _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa
-  cfRun _ handler (IdentityCf fa) = IdentityCf $ handler fa
