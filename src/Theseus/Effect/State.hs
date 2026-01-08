@@ -5,6 +5,11 @@ module Theseus.Effect.State where
 
 import Theseus.Eff
 
+-- # State
+
+-- State is a good example of a first order effect that changes the type of its
+-- output. It wraps the output in the final state.
+
 data State s m a where
   Get :: State s m s
   Put :: s -> State s m ()
@@ -16,39 +21,30 @@ gets :: State s `Member` es => (s -> a) -> Eff ef es a
 gets f = f <$> send Get
 
 put :: State s `Member` es => s -> Eff ef es ()
-put = send . Put
+put s = send $ Put s
 
 modify :: State s `Member` es => (s -> s) -> Eff ef es ()
 modify f = get >>= put . f
 
-withState :: State s `Member` es => Eff ef es a -> Eff ef es (s, a)
-withState eff = do
-  a <- eff
-  s' <- get
-  pure (s', a)
-
 type StateResult s = ((,) s)
 
-evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
-evalState s =
+runState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
+runState s =
   interpretW_ (s,) \case
-    Get -> pure (s, evalState s)
-    Put s' -> pure ((), evalState s')
+    Get -> pure (s, runState s)
+    Put s' -> pure ((), runState s')
 
 execState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es s
-execState s eff = fst <$> evalState s eff
+execState s eff = fst <$> runState s eff
 
-runState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
-runState = evalState
+evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es a
+evalState s eff = snd <$> runState s eff
 
-interposeState :: (ef (StateResult s), State s `Member` es) => s -> Eff ef es a -> Eff ef es (s, a)
-interposeState s = interposeWrapped (s,) \cases
-  Get _ continue -> interposeState s $ continue $ pure s
-  (Put s') _ continue -> interposeState s' $ continue $ pure ()
-
-transactionally :: (State s `Member` es, ef (StateResult s)) => Eff ef es a -> Eff ef es a
-transactionally @s action = do
-  initial <- get @s
-  (newS, a) <- interposeState initial action
+-- | Keeps track of local state changes and only commits them to the outer
+-- state if control flow continues correctly.
+transactionally :: (State s `Member` es, ef (StateResult s)) => Eff ef (State s : es) a -> Eff ef es a
+transactionally action = do
+  initial <- get
+  (newS, a) <- runState initial action
   put newS
   pure a

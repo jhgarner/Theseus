@@ -2,6 +2,7 @@ module Theseus.Effect.Output where
 
 import Theseus.Eff
 
+-- | This is a Writer without the higher order action.
 data Output w :: Effect where
   Output :: w -> Output w m ()
 

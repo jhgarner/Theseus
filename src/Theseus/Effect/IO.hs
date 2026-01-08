@@ -8,6 +8,9 @@ import Theseus.Eff
 data EIO m a where
   LiftIO :: IO a -> EIO m a
 
+-- | Finishes running an IO Eff. Depending on what other effects you've run,
+-- you might need to use `unrestrict` so that the first parameter contains the
+-- right constraint.
 runEffIO :: Eff Anything '[EIO] a -> IO a
 runEffIO =
   runEff . interpretRaw (pure . pure) \(LiftIO ioa) _ continue ->
