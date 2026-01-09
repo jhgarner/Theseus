@@ -18,36 +18,37 @@ Docco. Those are the best place to learn more about Theseus.
 
 For getting started, there are a couple good places:
 
-* The tutorial is the best starting place. If you're new to effect systems, it
-  should bring you up to speed with a couple of examples. If you're only new to
-  Theseus, it'll cover some of what makes Theseus unique.
-* The File example showcases Theseus' main feature. If you're experience with
-  effect systems and want to know what makes Theseus special, look there.
+* [The tutorial](https://jhgarner.github.io/Theseus/test/Terminal.html) is the
+  best starting place. If you're new to effect systems, it should bring you up
+  to speed with a couple of examples. If you're only new to Theseus, it'll cover
+  some of what makes Theseus unique.
+* [The File example](https://jhgarner.github.io/Theseus/test/FileExample.html)
+  showcases Theseus' main feature. If you're experience with effect systems and
+  want to know what makes Theseus special, look there.
 
 The builtin effects are useful to walk through as well since they the range of
 Theseus' complexity.
 
-* The Reader implementation covers a simple higher order effect.
-* The State implementation covers a simple first order effect that changes the
+* [The Reader implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Reader.html) covers a simple higher order effect.
+* [The State implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/State.html) covers a simple first order effect that changes the
   return type.
-* The Writer implementation is a higher order effect that also changes the
+* [The Writer implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Writer.html) is a higher order effect that also changes the
   return type.
-* The Error implementation introduces Theseus' control flow manipulation
+* [The Error implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Error.html) introduces Theseus' control flow manipulation
   features.
-* The Coroutine effect gives another example of unique control flow.
-* The Choice implementation shows the most complicated control flow.
+* [The Coroutine effect](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Coroutine.html) gives another example of unique control flow.
+* [The Choice implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Choice.html) shows the most complicated control flow.
 
 Finally there's the inner workings. These might be helpful while you're looking
 into the more complicated effects.
 
-* The Eff definition explains how it's all defined.
-* The interpreters explain how it can be used.
+* [The Eff definition](https://jhgarner.github.io/Theseus/src/Theseus/EffType.html) explains how it's all defined.
+* [The interpreters](https://jhgarner.github.io/Theseus/src/Theseus/Interpreters.html) explain how it can be used.
 
 ## Shoutouts
 
 There are some other amazing effect system libraries in Haskell exploring this
-space. Brief summaries follow, although it's worth finding them on Github and
-reading their docs as well.
+space. A non-exhaustive list of ones I'm familiar with are:
 
 * Fused-effects and Polysemy use a freer monad and Weave abstraction. They
   support a large number of higher order effects, but sacrifice some of the

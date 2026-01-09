@@ -3,7 +3,7 @@ module Theseus.Effect.Coroutine where
 import Control.Monad
 import Theseus.Eff
 
--- $ Coroutine
+-- # Coroutine
 
 -- The Coroutine effect uses special control flow to pause the thread of
 -- computation. While the computation is paused, the interpreters can be
