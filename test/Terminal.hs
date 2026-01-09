@@ -14,7 +14,7 @@ import Theseus.Effect.State
 -- # Tutorial
 
 -- This module acts as a tutorial for Theseus. If you're familiar with other
--- effect systems, it should all be pretty familiar. If not, hopefully it walks
+-- effect systems, it should all be pretty similar. If not, hopefully it walks
 -- you through the basics. Regardless of your experience level, reach out if
 -- you have any questions!
 --
@@ -26,40 +26,41 @@ import Theseus.Effect.State
 -- makes it easy to write anything ranging from unit tests to integration
 -- tests. In general, functions should have a very small number of effects
 -- associated with them. If a function's signature begins to grow unwieldy, it
--- probably means you need to introduce a new effect abstract away something.
+-- probably means you need to introduce a new effect to abstract away
+-- something.
 
 -- ## First Order Effects
 
--- Anyway, let's jump into how you use Theseus. Our goal is to implement
+-- Let's jump into how you use Theseus. Our goal is to implement
 -- a Terminal effect that interacts with stdin and stdout. We'll also include
 -- a test implementation and a test program that we can verify. This is
 -- a common example across effect system libraries because it matches the
--- common case. Most effects will be like the Terminal effect: domain specific,
+-- common case. Most effects will be like the Terminal effect: domain specific
 -- and fairly simple. In general you should never be afraid of introducing new
 -- effects.
 
 -- Effects are defined as GADTs. Each operation that the effect performs will
 -- be a constructor of the GADT.
 data Terminal :: Effect where
-  -- This operation accepts a String parameter and returns (). The `m` is there
+  -- This operation accepts a String parameter and returns `()`. The `m` is there
   -- in case our effect were higher order. We don't need to worry about it now.
   WriteLine :: String -> Terminal m ()
   -- This operation has no parameters and returns a String.
   ReadLine :: Terminal m String
 
--- Now for some helper functions. Most effect systems have some template
--- haskell to generate these. Theseus doesn't have that yet. They're boring
--- boilerplate, but we'll use them to show a couple new concepts.
+-- Now for some helper functions. Most effect systems use template haskell to
+-- generate these. Theseus doesn't have that yet. They're boring boilerplate,
+-- but we'll use them to show a couple new concepts.
 
 -- A few things are introduced in this line. `Eff` is the Monad that our effect
 -- system runs in. The `ef` parameter we'll ignore for now. The `es` parameter
--- stands for a type level list of effects. By making `es` generic, we're
--- saying that (almost) any list of effects will work. The `Member` constraint
--- limits the list to lists that contain `Terminal`. The final parameter to Eff
--- is the return type of the effectful computation.
+-- is a type level list of effects. By making `es` generic, we're saying that
+-- (almost) any list of effects will work. The `Member` constraint limits the
+-- list to lists that contain `Terminal`. The final parameter to Eff is the
+-- return type of the effectful computation.
 writeLine :: Terminal `Member` es => String -> Eff ef es ()
--- The send function takes an Effect and prepares it to be executed. Using
--- `send` doesn't say anything about how it'll be executed.
+-- The send function takes an Effect and prepares it to be executed. The `send`
+-- function doesn't say anything about how it'll be executed.
 writeLine line = send $ WriteLine line
 
 readLine :: Terminal `Member` es => Eff ef es String
@@ -97,7 +98,7 @@ thrice = do
 -- effect stack, `Eff` implements `MonadIO`.
 runTerminal :: (ef Identity, EIO `Member` es) => Eff ef (Terminal : es) a -> Eff ef es a
 -- There are a few different interpret functions. The most general
--- `interpretRaw` gives you a ton of control flow flexibility but requires
+-- `interpretRaw` gives you a ton of control flow flexibility, but requires
 -- a lot of boilerplate and manual verification. We won't cover it in this
 -- tutorial. The next most general is `interpretW` which is used by
 -- interpreters that need to wrap the output in something other than
@@ -263,7 +264,7 @@ runFS = interpret \sender (Open path action) ->
   -- implementations. If you want the other behavior, you should add a `Member`
   -- constraint to the GADT. Then you won't have to use `sender` and the
   -- highest interpreter will be used. That would look like
-  -- `Open :: EIO \`Member\` es => ...`.
+  -- ``Open :: EIO `Member` es => ...``.
   pure $ sender @EIO $ withFile path action
 
 -- That was a lot! We went through a whirlwind of features. To summarize, we

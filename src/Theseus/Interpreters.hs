@@ -10,6 +10,18 @@ import Theseus.Union
 
 -- # Interpreting
 
+-- This is where the Eff data type actually does useful work. The EffType
+-- helps us understand how Eff is built, and this module helps us understand
+-- how Eff is consumed. The most fundamental interpreting function is near the
+-- bottom called `interpretRaw`. The others are built on it.
+--
+-- Theseus also supports "interposing" effects. When you interpose an effect,
+-- you replace the handler for one `send` with something else. Interposing is
+-- helpful because it can be done on effects regardless of where they are in
+-- the stack. Interposing is also kind of hard to use and hides what's going
+-- on, so I usually avoid it. You can see in the `Reader` and `Writer` files
+-- how Theseus uses standard interpretation instead of interposition.
+
 -- | A Sender is useful when working with higher order effects. It acts a lot
 -- like a Quantified Constraint saying that any effects that are in scope for
 -- the handler are in scope for the sender. Ideally we'd be able to write it as
@@ -115,6 +127,10 @@ instance Subset ls es => Subset (l : ls) es where
 -- | Add private effects to an interpreter. The effects will be accessible to
 -- the current interpreter, but they won't be accessible to anyone else. Use
 -- this for "pure" effects that you can never imagine mocking.
+--
+-- You cannot combine private effects with `sender`. Doing so will trigger
+-- a runtime error. This is because the private effect is not in scope for the
+-- sender, so there's no way to send it from there.
 using ::
   forall eff handlerEs ef es a b.
   Subset handlerEs es =>
@@ -162,7 +178,8 @@ type HandlerRaw eff ef es cf wrap =
 -- | Read this as
 -- `(IsMember e es -> IsMember e esSend) -> Member e es => Member e esSend`. In
 -- other words, it turns a `->` into a `=>`. Of course we can't actually
--- express that in Haskell directly so there's a little extra going on.
+-- express that in Haskell directly so there's a little extra going on. This is
+-- related to the `Sender` and looks vaguely like a quantified constraint.
 liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
 liftIt f = withProof (f getProof)
 
@@ -173,7 +190,8 @@ unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Eff ef es a -
 unrestrict (Eff (Pure a)) = Eff $ Pure a
 unrestrict (Eff (Impure eff lift continue)) = Eff $ Impure eff lift \member -> withProof member (cfMap implying unrestrict) . continue member
 
--- | The simplest control flow. It represents a straight line.
+-- | The simplest control flow. It represents a straight line or a single
+-- thread.
 newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
   deriving (Functor)
 

@@ -9,10 +9,12 @@ import Theseus.Effect.Choice
 import Theseus.Effect.IO
 import Theseus.Effect.Input
 
+-- # Why I think Theseus is Cool
+
 -- This example shows something that most effect systems can't handle:
 -- combining higher order effects, rich control flow, and prompt resource
 -- management. Although it's not interacting with real IO to read the file, you
--- can still trace it doing what it should.
+-- can still trace it doing what it should through the printlns.
 testFileExample :: IO ()
 testFileExample = void $ runEffIO $ runCollect $ collect $ runFS $ do
   file <- pure "a.txt" <|> pure "b.txt"
@@ -20,7 +22,8 @@ testFileExample = void $ runEffIO $ runCollect $ collect $ runFS $ do
     contents <- readHandle handle
     liftIO $ putStrLn $ "read: " ++ contents
     -- In most effect systems, the following line would cause the file to be
-    -- closed twice because the control flow is split into two branches.
+    -- closed twice because the control flow is split into two threads. In
+    -- Theseus the file is only closed once after all the writes are complete.
     somethingElse <- pure "left" <|> pure "right"
     writeHandle handle somethingElse
 
@@ -43,15 +46,20 @@ testFileExample = void $ runEffIO $ runCollect $ collect $ runFS $ do
 -- useful info whenever a file operation happens.
 newtype Handle fs = Handle String -- Pretend like there's real data here
 
+-- This higher order effect provides File effects.
 data FS :: Effect where
+  -- It uses the runST trick to make sure the Handle isn't used outside its
+  -- scope.
   WithFile :: ef Identity => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> FS (Eff ef es) a
 
-withFile :: (FS `Member` es, EIO `Member` es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
+withFile :: (FS `Member` es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
 withFile s action = send $ WithFile s action
 
 runFS :: (EIO `Member` es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
 runFS = interpret \sender (WithFile file action) -> do
   liftIO $ putStrLn $ "Opening file " ++ file
+  -- We can use effects that are in scope for the interpreter within the scope
+  -- of the sender.
   pure $ sender @EIO (runFile file action)
 
 data File fs :: Effect where
@@ -65,16 +73,17 @@ writeHandle :: File fs `Member` es => Handle fs -> String -> Eff ef es ()
 writeHandle handle s = send $ WriteHandle handle s
 
 runFile :: (ef Identity, EIO `Member` es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
-runFile name act = using (resource openFile closeFile) (interpret_ handle) $ act $ Handle name
+-- The `resource` function creates an `Input` effect whose interpretation
+-- ensures that the finalizer is always run.
+runFile name act = with (act $ Handle name) $ using (resource openFile closeFile) $ interpret_ \case
+  (ReadHandle (Handle name)) -> do
+    liftIO $ putStrLn $ "I'm reading from " ++ name
+    pure "Pretend like I'm doing real IO"
+  (WriteHandle (Handle name) contents) -> do
+    liftIO $ putStrLn $ "I'm writing " ++ show contents ++ " to " ++ name
+    pure ()
  where
   openFile = do
     liftIO $ putStrLn $ "opening " ++ name ++ " now"
     pure $ Handle name
   closeFile (Handle name) = liftIO $ putStrLn $ "closing " ++ name ++ " now"
-  handle :: EIO `Member` es => Handler_ (File fs) ef es
-  handle (ReadHandle (Handle name)) = do
-    liftIO $ putStrLn $ "I'm reading from " ++ name
-    pure "Pretend like I'm doing real IO"
-  handle (WriteHandle (Handle name) contents) = do
-    liftIO $ putStrLn $ "I'm writing " ++ show contents ++ " to " ++ name
-    pure ()

@@ -201,7 +201,7 @@ newtype Eff (ef :: Out) (es :: [Effect]) a = Eff {unEff :: Freer ef es a}
 
 -- | Adds an extra unused effect onto the top of an effectful computation. This
 -- is helpful when you want to hide certain effects from pieces of code.
-raise :: forall eff ef es a. Eff ef es a -> Eff ef (eff : es) a
+raise :: Eff ef es a -> Eff ef (eff : es) a
 raise (Eff act) = Eff case act of
   Pure a -> Pure a
   Impure eff lifter next -> Impure
@@ -230,10 +230,10 @@ raise (Eff act) = Eff case act of
       {- HLINT ignore "Avoid lambda" -}
       Deeper member -> \x -> withProof member $ cfMap implying raise $ next member x
       IsMember _ -> error "Impossible raise condition"
-
-raiseUnion :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
-raiseUnion (This eff) = That (This eff)
-raiseUnion (That rest) = That $ raiseUnion rest
+ where
+  raiseUnion :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
+  raiseUnion (This eff) = That (This eff)
+  raiseUnion (That rest) = That $ raiseUnion rest
 
 -- | Like the raise function, but inserts the effect one layer deeper in the
 -- stack. This allows you to add private effects to the stack.
@@ -242,14 +242,18 @@ raiseUnder (Eff (Pure a)) = Eff $ pure a
 raiseUnder (Eff (Impure @_ @_ @esSend eff lifter next)) = Eff $ Impure (raiseUnderUnion eff) lifter' \case
   IsMember _ -> cfMap implying raiseUnder . next getProof
   Deeper (Deeper proof) -> \x -> withProof proof $ cfMap implying raiseUnder $ next (Deeper proof) x
-  Deeper (IsMember _) -> error "2 The raised value is not used"
+  Deeper (IsMember _) -> error "Impossible raiseUnder + membership proof"
  where
   lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)
   lifter' l =
     case l of
       IsMember _ -> lifter getProof
       Deeper (Deeper proof) -> lifter $ Deeper proof
-      Deeper (IsMember _) -> _
+      -- The `raiseUnder` function is a bit different from `raise` in that it's
+      -- easy to trigger this runtime error. If you create a private effect and
+      -- try to send it to the sender, that will fail. This makes sense because
+      -- the private effect is only in es, not esSend.
+      Deeper (IsMember _) -> error "In higher order effects, private effects cannot be run by the sender."
 
 raiseUnderUnion :: Union (eff : es) (Eff efSend esSend) x -> Union (eff : e : es) (Eff efSend esSend) x
 raiseUnderUnion (This eff) = This eff
