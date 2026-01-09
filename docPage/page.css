@@ -1,6 +1,6 @@
 /*--------------------- Typography ----------------------------*/
 
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700;900&display=swap');
 
 /*--------------------- Layout ----------------------------*/
 html { 
@@ -234,6 +234,7 @@ ul.sections > li > div.annotation {
 
 ul.sections > li > div.content {
   padding: 9px 15px 16px 25px;
+  font-weight: 400;
   vertical-align: top;
   border: none;
   -webkit-box-shadow: none;
@@ -331,7 +332,6 @@ pre .hljs-class .hljs-title,
 pre .hljs-haskell .hljs-label,
 pre .hljs-tex .hljs-command {
   color: #458;
-  font-weight: bold
 }
 
 pre .hljs-tag,
@@ -355,7 +355,6 @@ pre .hljs-regexp {
 
 pre .hljs-class {
   color: #458;
-  font-weight: bold
 }
 
 pre .hljs-symbol,
@@ -381,7 +380,6 @@ pre .hljs-doctype,
 pre .hljs-shebang,
 pre .hljs-cdata {
   color: #999;
-  font-weight: bold
 }
 
 pre .hljs-deletion {
