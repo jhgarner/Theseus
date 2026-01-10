@@ -115,7 +115,7 @@ runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
 runSimpleH s = interpret \_ (ActH action) -> pure $ fmap (++ s) action
 
 runSimpleHWrapping :: Simple `Member` es => ef SHW => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
-runSimpleHWrapping s = interpretW (SHW "" "") (elabSimpleHWrapping s)
+runSimpleHWrapping s = interpretW (pure . SHW "" "") (elabSimpleHWrapping s)
 
 data SHW a = SHW String String a
   deriving (Functor, Foldable, Traversable, Eq, Show)

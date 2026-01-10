@@ -37,7 +37,7 @@ runState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, 
 runState s =
   -- This is an interpreter which changes the output. Instead of simply
   -- returning `a`, it returns `a` and the final value of the state.
-  interpretW_ (s,) \case
+  interpretW_ (\a -> pure (s, a)) \case
     -- Wrapping interpreters need to provide the value to continue with
     -- alongside an interpretation for the next instance of this effect. This
     -- gives us a natural way of keeping track of state.

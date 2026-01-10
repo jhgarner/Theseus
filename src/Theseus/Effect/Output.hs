@@ -15,4 +15,4 @@ runOutput :: (Monoid w, ef (OutputResult w)) => Eff ef (Output w : es) a -> Eff 
 runOutput = go mempty
  where
   go :: (Monoid w, ef (OutputResult w)) => w -> Eff ef (Output w : es) a -> Eff ef es (OutputResult w a)
-  go soFar = interpretW_ (soFar,) $ \(Output w) -> pure ((), go $ soFar <> w)
+  go soFar = interpretW_ (\a -> pure (soFar, a)) $ \(Output w) -> pure ((), go $ soFar <> w)

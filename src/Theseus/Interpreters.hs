@@ -73,13 +73,13 @@ type Handler eff ef es =
 interpretW ::
   forall eff ef es a wrap.
   ef wrap =>
-  (forall x. x -> wrap x) ->
+  (forall x. x -> Eff ef es (wrap x)) ->
   HandlerW eff ef es wrap ->
   Eff ef (eff : es) a ->
   Eff ef es (wrap a)
 interpretW wrap f =
   interpretRaw
-    (pure . wrap)
+    wrap
     \eff sender next -> do
       (continueWith, handleNext) <- f sender eff
       handleNext $ runIdentityCf $ next $ IdentityCf continueWith
@@ -98,7 +98,7 @@ type HandlerW eff ef es wrap =
 interpretW_ ::
   forall eff ef es a wrap.
   ef wrap =>
-  (forall x. x -> wrap x) ->
+  (forall x. x -> Eff ef es (wrap x)) ->
   HandlerW_ eff ef es wrap ->
   Eff ef (eff : es) a ->
   Eff ef es (wrap a)
@@ -146,6 +146,16 @@ using deps interpret act = deps $ interpret $ raising act
 -- awkward parentheses around large lambdas.
 with :: Eff ef (eff : es) a -> (Eff ef (eff : es) a -> Eff ef es b) -> Eff ef es b
 with action interpret = interpret action
+
+data VoidEffect :: Effect
+
+-- | Guarantees that the first parameter will run exactly once as soon as the
+-- second parameter is complete. This applies even if the second parameter uses
+-- effects that manipulate the control flow.
+finally :: ef Identity => Eff ef es () -> Eff ef es a -> Eff ef es a
+finally final (Eff (Pure a)) = final >> pure a
+finally final (Eff (Impure eff lifter next)) = Eff $ Impure eff lifter \member x ->
+  fmap runIdentity $ withProof member $ cfRun implying (fmap Identity . finally final) $ next member x
 
 -- | Interprets an effect with maximum flexibility. Unless your effect
 -- interpretation changes the control flow in strange ways, you probably want

@@ -31,6 +31,7 @@ module Theseus.Eff (
   -- * Handling Effects
   using,
   with,
+  finally,
   Sender,
   Handler,
   interpret,
