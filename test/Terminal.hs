@@ -13,10 +13,10 @@ import Theseus.Effect.State
 
 -- # Tutorial
 
--- This module acts as a tutorial for Theseus. If you're familiar with other
--- effect systems, it should all be pretty similar. If not, hopefully it walks
--- you through the basics. Regardless of your experience level, reach out if
--- you have any questions!
+-- This module is a tutorial for Theseus. If you're familiar with other effect
+-- systems, it should all be pretty similar. If not, hopefully it walks you
+-- through the basics. Regardless of your experience level, reach out if you
+-- have any questions!
 --
 -- When you use an effect system library, you'll end up with a pyramid of
 -- effects. At the bottom of the pyramid are low level generic effects. Those
@@ -29,7 +29,7 @@ import Theseus.Effect.State
 -- probably means you need to introduce a new effect to abstract away
 -- something.
 
--- ## First Order Effects
+-- ## Affecting the World
 
 -- Let's jump into how you use Theseus. Our goal is to implement
 -- a Terminal effect that interacts with stdin and stdout. We'll also include
@@ -39,28 +39,49 @@ import Theseus.Effect.State
 -- and fairly simple. In general you should never be afraid of introducing new
 -- effects.
 
--- Effects are defined as GADTs. Each operation that the effect performs will
--- be a constructor of the GADT.
+-- Effects are defined as GADTs. This can feel a bit like an abuse of notation.
+-- An effect consists of a bundle of operations. Each operation has a function
+-- signature; they'll take parameters and return something. GADTs are an
+-- extremely convenient way of representing that. Each constructor of a GADT
+-- represents an operation, and the syntax for defining a constructor is
+-- remarkably close to that of a function signature. You can even write
+-- polymorphic functions with constraints as GADT constructors. The illusion
+-- breaks down a bit when you see the return type of the GADT constructor. The
+-- return type will consist of the effects name followed by a mysterious `m`
+-- parameter (which we'll explain later in the tutorial) followed by the actual
+-- return type of the function. Anyway, when you see a GADT of kind `Effect`,
+-- look past the GADT and think about operations and functions signatures.
 data Terminal :: Effect where
-  -- This operation accepts a String parameter and returns `()`. The `m` is there
-  -- in case our effect were higher order. We don't need to worry about it now.
   WriteLine :: String -> Terminal m ()
-  -- This operation has no parameters and returns a String.
   ReadLine :: Terminal m String
 
--- Now for some helper functions. Most effect systems use template haskell to
--- generate these. Theseus doesn't have that yet. They're boring boilerplate,
--- but we'll use them to show a couple new concepts.
+-- Now for some functions that trigger our effect. Most effect systems use
+-- template haskell to generate these. Theseus doesn't have that yet. They're
+-- boring boilerplate, but we'll use them to show a couple new concepts. Effect
+-- systems keep separate triggering effects from interpreting them. Code can
+-- trigger effects without saying anything about how they'll be interpreted.
+-- This is what makes effect systems so useful for testing. The same code can
+-- trigger effects that'll be interpreted using, for example, real database
+-- calls, and it can trigger effects that'll be interpreted using a mocked
+-- database. One block of code can be interpreted in any number of ways. Note
+-- that to match other libraries, we use `send` instead of `trigger` from here
+-- on out.
 
 -- A few things are introduced in this line. `Eff` is the Monad that our effect
 -- system runs in. The `ef` parameter we'll ignore for now. The `es` parameter
--- is a type level list of effects. By making `es` generic, we're saying that
--- (almost) any list of effects will work. The `Member` constraint limits the
--- list to lists that contain `Terminal`. The final parameter to Eff is the
--- return type of the effectful computation.
+-- is a type level list of effects. The `es` parameter will change as the
+-- program runs and effects are handled and introduced. Within one "level" of
+-- code (think all the actions within the same do block) it will remain the
+-- same. You have to introduce new "levels" to change it. We'll see examples of
+-- that when we get to interpreting effects. By making `es` generic, we're
+-- saying that (almost) any list of effects will work. The `Member` constraint
+-- limits the list to those that contain `Terminal`. We can only `send` effects
+-- to `Eff` if they're part of the effect stack. All effects that are in the
+-- stack are effects that `Eff` can handle.
+--
+-- It's possible for there to be multiple instances of the same effect in the
+-- stack. That's fine! The `Member` constraint will find the topmost one.
 writeLine :: Terminal `Member` es => String -> Eff ef es ()
--- The send function takes an Effect and prepares it to be executed. The `send`
--- function doesn't say anything about how it'll be executed.
 writeLine line = send $ WriteLine line
 
 readLine :: Terminal `Member` es => Eff ef es String
@@ -76,9 +97,12 @@ thrice = do
   writeLine lineToEcho
   writeLine lineToEcho
 
--- Hopefully that's not too hard to follow. We're once again using our `Eff`
--- and `Member` types. The last thing we need is a way to run `thrice`. For
--- that we'll need an interpreter for `Terminal` effects.
+-- Hopefully that's not too hard to follow. Except for the type signature, it
+-- should look nearly identical to how you'd write it normally. This is code
+-- that triggers/sends effects. It says nothing about their interpretation.
+-- That means we can reuse it in many ways. To run `thrice` we'll need at least
+-- one interpretation, so let's create an interpretation that does what you'd
+-- expect: reads and writes to stdin and stdout.
 
 -- Here we see our first use of `ef`. Honestly, `ef` is kind of messy and it's
 -- best just to add it whenever the compiler errors tell you to. The `ef`
@@ -91,72 +115,100 @@ thrice = do
 -- don't really care much about `ef` most of the time. Usually effect
 -- interpreters support all wrappers and use the `Identity` wrapper themselves.
 -- We only need this because a handful of uncommon (but powerful) interpreters
--- require it.
+-- require it. If you're not writing one of those effects, just add `ef` to
+-- your interpreter's type signature with whatever value the compiler requires.
 --
 -- The other constraint we have is for the `EIO` effect. EIO says that we can
 -- lift arbitrary IO operations into `Eff`. When `EIO` is a member of the
 -- effect stack, `Eff` implements `MonadIO`.
 runTerminal :: (ef Identity, EIO `Member` es) => Eff ef (Terminal : es) a -> Eff ef es a
--- There are a few different interpret functions. The most general
--- `interpretRaw` gives you a ton of control flow flexibility, but requires
--- a lot of boilerplate and manual verification. We won't cover it in this
--- tutorial. The next most general is `interpretW` which is used by
--- interpreters that need to wrap the output in something other than
--- `Identity`. Finally is `interpret` which is for interpreters that don't need
--- to change the result type in any way. When there's an `_` at the end of the
--- name, it means it's specialized for first order effects. We'll look at an
--- example of a higher order effect later.
 runTerminal = interpret_ \case
   WriteLine line -> liftIO $ putStrLn line
   ReadLine -> liftIO getLine
 
 -- Now we have everything we need to turn our `thrice` function into something
--- Haskell can actually run.
+-- Haskell can actually run. The runEffIO function turns an effect stack that
+-- only contains the `EIO` effect into an IO operation.
 thriceIO :: IO ()
--- The runEffIO function turns a effect stack that only contains the `EIO`
--- effect into an IO operation.
 thriceIO = runEffIO $ runTerminal thrice
 
--- So far all we've done is introduce a lot of complexity for little gain. To
--- show why effect systems are powerful, let's add some test code.
+-- Great! Now we have one interpretation we can use in production, but we'd
+-- really like to have a test interpretation as well which doesn't interact
+-- with stdin and stdout. Instead it should read the input from a list of lines
+-- and capture the output into a list of lines. That way we can control the
+-- input to `thrice` and assert that its output is correct.
 
--- This effect allows us to interact with HSpec within our computation. You
--- wouldn't use it in production, but test code will find it helpful.
+-- First we're going to make one more effect to help us interact with HSpec.
+-- The `ShouldBe` operation asserts that the left hand side side and right hand
+-- side are equal.
 data HSpec :: Effect where
   ShouldBe :: (Show a, Eq a) => a -> a -> HSpec m ()
 
 shouldBe :: (Show a, Eq a, HSpec `Member` es) => a -> a -> Eff ef es ()
 shouldBe actual expected = send $ ShouldBe actual expected
 
--- This interpreter assumes that `HSpec` and `EIO` will be the last two
--- effects. It would also be valid (and probably cleaner) to write a `runTest`
--- interpreter that composes with `runEffIO`.
+runHSpec :: (ef Identity, EIO `Member` es) => Eff ef (HSpec : es) a -> Eff ef es a
+runHSpec = interpret_ \case
+  ShouldBe actual expected -> liftIO $ actual `Test.shouldBe` expected
+
 runTest :: Eff Anything [HSpec, EIO] a -> Test.Expectation
-runTest = void . runEffIO . interpret_ \(ShouldBe actual expected) -> liftIO $ actual `Test.shouldBe` expected
+runTest = void . runEffIO . runHSpec
 
 -- And here's our test implementation of `Terminal`. It accepts a list of lines
 -- as input and returns the list of lines that were output. Note the new `ef
 -- (OutputResult [String])` constraint. Internally our interpreter uses an
--- Output interpreter that changes the return type of the computation (it adds
+-- `Output` interpreter that changes the return type of the computation (it adds
 -- the output to the returned value). The constraint ensures that any other
--- effect interpreters will be OK with that. They all should be.
-runTerminalMock :: (HSpec `Member` es, ef (OutputResult [String]), ef Identity) => [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
+-- effect interpreters will be OK with that. They all should be, but we need
+-- the constraint so Haskell can verify that.
+runTerminalMock ::
+  (HSpec `Member` es, ef (OutputResult [String]), ef Identity) =>
+  [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
 runTerminalMock stdin action = do
   -- Here we see a couple new functions. First is `with` which just rearranges
   -- the order of parameters that interpreters take. Normally the action is the
-  -- last parameter to the interpreter, but that can create awkward parentheses
-  -- in cases like this. The `with` function fixes that. Second is the `using`
-  -- function. It introduces private effects that only this interpreter can use.
+  -- last parameter to the interpreter. That usually looks nice and lets us
+  -- write interpreters in a point free way, but it can create awkward
+  -- parentheses in cases like this. The `with` function moves the thing we're
+  -- interpreting to the beginning of the line to avoid the parentheses. Second
+  -- is the `using` function. It introduces private effects that only this
+  -- interpreter can use.
+  --
+  -- What makes an effect "private" as compared to "public"? Consider the
+  -- effect stack (`es`). Any effect on the stack can be used by any other
+  -- effect above it in the stack. That's what `Member` does: it finds effects
+  -- in the stack and exposes them. If it's in the stack, you can use `Member`
+  -- to find it. That makes every effect in the stack "public". If anyone can
+  -- use `Member` to find it, everyone can. Now imagine the interpretation
+  -- we're defining now. We rely on an `Output [String]` to track the list of
+  -- printed lines. We could add ``Output [String] `Member` es`` to the type
+  -- signature up above. If we do that though, there's nothing stopping other
+  -- code from also adding ``Output [String] `Member` es`` and using the output
+  -- as well. The `Output [String]` effect is so generic that maybe some other
+  -- effect is using it for logging. Everything would look fine until we added
+  -- logging to our `thrice` function. Suddenly we'd have logs and captured
+  -- stdout mixed into the same list! That would break our test and be a huge
+  -- pain to debug.
+  --
+  -- What we'd like to do instead is say that this `Output [String]` can only
+  -- be used by this interpreter for `Terminal`. Other code might output to
+  -- other `Output [String]`s on the stack, but this one at this position in
+  -- the stack is ours only. That's where "private" effects come in. A private
+  -- effect is one which only appears on the effect stack within the
+  -- interpreter. Since its not on the effect stack any other time, no one else
+  -- can access it using `Member` constraints. It makes our code resilient to
+  -- things like the thrice logging problem. Private effects are not a
+  -- fundamental feature of Theseus, but instead arise from how we can
+  -- manipulate the effect stack. The `raise` family of functions (which
+  -- `using` calls behind the scenes) add new effects to the stack. By
+  -- carefully controlling when effects are added to the stack, we can
+  -- effectively hide them until they're needed.
+  --
   -- We're introducing two private effects. The State keeps track of what input
-  -- still needs to be read and the output keeps track of what was printed.
-  -- Because we're using `using`, none of the code within `action` can use
-  -- these effects. Similarly, they're gone as soon as our interpreter finishes
-  -- running. That all is what makes them private.
+  -- still needs to be read, and the output keeps track of what was printed.
   (unusedInput, output) <- with action $ using (runState stdin . runOutput @[String]) $ interpret_ \case
     WriteLine line -> output [line]
     ReadLine -> do
-      -- We'll use partial functions since it's fine if our test throws
-      -- Exceptions.
       nextLine <- fmap head get
       modify @[String] tail
       pure nextLine
@@ -164,8 +216,8 @@ runTerminalMock stdin action = do
   unusedInput `shouldBe` []
   pure output
 
--- Now we can write an HSpec test for our thrice function.
-
+-- And now we can write a remarkably clean HSpec test to make sure `thrice`
+-- works.
 testThrice :: SpecWith ()
 testThrice = do
   describe "Thrice" do
@@ -178,12 +230,38 @@ testThrice = do
 
 -- ## Higher Order Effects
 
--- Contriving our example some more, lets say we want to reuse our `thrice`
--- program, but we want it to read and write to files instead of stdout and
--- stdin. Keeping `thrice` the exact same, we'll define a new implementation of
--- `Terminal` (in reality you'd probably not call the effect Terminal anymore,
--- but for the sake of our example we'll stick with it). First we need an
--- effect for interacting with files.
+-- In effect system literature, we differentiate between first order algebraic
+-- effects and higher order effects. The difference between the two is similar
+-- to the difference between first order functions and higher order functions.
+-- A first order function like `head` accepts and returns things that are not
+-- functions. A higher order function like `map` accepts a parameter that is
+-- a function. The same applies to first and higher order effects. A first
+-- order effect (like `Terminal`, `HSpec`, `Output`, and `State`) accepts
+-- parameters that are not effectful computations. Higher order effects accept
+-- parameters or return values that are effectful computations. A great example
+-- would be the `Catch` effect. You can trigger `Catch` with something like
+--
+-- ```haskell
+-- catch (writeLine "inside the catch" >> throw "Whoops!")
+--  \thrown -> writeLine thrown
+-- ```
+--
+-- Notice how the parameters to `catch` use the `Eff` type. That's what makes
+-- it higher order. Whether an effect is higher order or not is a property of
+-- the effect, not the interpretation. You can tell whether an effect is higher
+-- order by looking at its GADT definition.
+--
+-- Theseus is a library that supports higher order effects. In this section,
+-- we'll introduce a mix of higher order and first order effects, and show how
+-- they interact.
+
+-- Contriving our Terminal example some more, lets say we want to reuse our
+-- `thrice` program, but we want it to read and write to files instead of
+-- stdout and stdin. Keeping `thrice` the exact same, we'll define a new
+-- implementation of `Terminal` (in reality you'd probably not call the effect
+-- Terminal anymore, but for the sake of our example we'll stick with it).
+-- In this example we'll define a first order effect for interacting with
+-- files, then we'll introduce a higher order effect for managing open files.
 
 -- This is just a specially named Proxy. We need it because we'll be using the
 -- `ST` trick to make sure our files can't be used after they're closed.
@@ -202,17 +280,22 @@ writeLineTo file line = send $ WriteLineTo file line
 
 -- This type signature should look pretty normal except for its use of the `ST`
 -- trick.
-withFile :: (ef Identity, EIO `Member` es) => FilePath -> (forall tag. OpenFile tag -> Eff ef (File tag : es) a) -> Eff ef es a
+withFile ::
+  (ef Identity, EIO `Member` es) =>
+  FilePath ->
+  (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
+  Eff ef es a
 -- Here we use the `resource` function. That's an interpreter for the `Input`
--- effect which guarantees that the close method will be called when the
+-- effect which guarantees that the `close` method will be called when the
 -- interpreter is finished. If you're coming with experience in effect systems
 -- that have things like `Coroutines` and `Choice` effects, this might set off
 -- warning bells for you. Theseus also has those effects, but they don't break
--- `resource`.
+-- `resource`. If you're interested in understanding why, you'll need to dig
+-- into some of the other links in the readme. Unfortunately it's complicated.
+-- Luckily we don't need to worry about the complicated implementation details
+-- to benefit from it.
 withFile path action = with (action OpenFile) $ using (resource open close) $ interpret_ \case
   ReadLineFrom OpenFile -> do
-    -- Within the scope of our `File` interpreter, we can use the private
-    -- `input` to get the file handle.
     handle <- input
     liftIO $ hGetLine handle
   WriteLineTo OpenFile line -> do
@@ -225,50 +308,80 @@ withFile path action = with (action OpenFile) $ using (resource open close) $ in
 -- Next let's create a higher order file system effect to open files.
 
 data FS :: Effect where
-  -- Here we see how the previously unused type parameter for our `Effect`
-  -- GADTs encodes the higher order information. That parameter represents the
-  -- effect stack at the time our effect was sent. It's important to realize
-  -- that this will not be the same effect stack as when the effect was
-  -- interpreted. We'll see why that matters in the interpreter and I'll repeat
-  -- this a few times in a few different ways because it's essential for
-  -- understanding higher order effects.
-  Open :: ef Identity => FilePath -> (forall tag. OpenFile tag -> Eff ef (File tag : es) a) -> FS (Eff ef es) a
+  -- Remember that `m` parameter on our effects from before? Now we're using
+  -- it! The first type parameter of an effect is `Eff` when the effect is
+  -- being sent. We can call it `m` when we don't really care what it is, and
+  -- we can call it `Eff ef es` when we do. It's important to realize that this
+  -- is not the same `es` as we see in the interpreter's type signature.
+  -- Functions like `interpret` and `using` manipulate the effect stack and
+  -- introduce new scopes. There might be effects which are on the effect stack
+  -- and in scope where the effect is sent, but which aren't in scope where the
+  -- effect is being interpreted. The opposite can be true when private effects
+  -- are used. That makes higher order effects trickier to interpret. The
+  -- difference between the send effect stack and the interpret effect stack is
+  -- subtle but really important, so I'll repeat it a few times in different
+  -- ways as we go.
+  Open ::
+    ef Identity =>
+    FilePath ->
+    (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
+    FS (Eff ef es) a
 
-open :: (FS `Member` es, ef Identity) => FilePath -> (forall tag. OpenFile tag -> Eff ef (File tag : es) a) -> Eff ef es a
+open ::
+  (FS `Member` es, ef Identity) =>
+  FilePath ->
+  (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
+  Eff ef es a
 open path action = send $ Open path action
 
 runFS :: (ef Identity, EIO `Member` es) => Eff ef (FS : es) a -> Eff ef es a
 -- We're using `interpret` instead of `interpret_`. That changes a couple
--- things. First we get an extra `sender` parameter. With that parameter, we
--- can turn a proof that an effect is in scope when the interpreter was running
--- into a proof that the effect is in scope when the effect was sent. The two
+-- things.
+--
+-- First we get an extra `sender` parameter. With that parameter, we can turn
+-- a proof that an effect is in scope where the interpreter is running into
+-- a proof that the effect is in scope where the effect is being sent. The two
 -- effect stacks might not be the same if you have something such as
--- `runFS $ runSomethingElse $ open "x"`. At the interpreter level, we have
--- `es`, but where `open` is called we have `SomethingElse : es`.
+-- `runFS $ runSomethingElse $ open "x"`. At the interpreter level, we just
+-- have `es`, but where `send` is used we have `SomethingElse : FS : es`. There
+-- are more effects available where `send` was called, but they both have
+-- a subset of the list that's shared.
+--
+-- Second it changes the return type. Instead of returning an `Eff ef es x`, we
+-- return an `Eff ef es (Eff efSend esSend x)`. The *send types represent the
+-- effect stack where the effect was sent. That nested `Eff` can be tricky to
+-- wrap your head around. In both cases, the `x` variable represents whatever
+-- type the effectful program needs to continue. In the first order case, we
+-- can use any of the effects that are in scope for the interpreter (aka
+-- effects that are in `es`) to calculate that value. In the higher order case
+-- that's still true: we can still use any effects that are in scope for the
+-- interpreter to calculate a value for `x`. What we gain though is the ability
+-- to use effects that are in scope where the effect that we're interpreting
+-- was sent (aka effects that are in `esSend`). This allows us to interpret
+-- higher order effects because the effect we're interpreting has type
+-- `FS (Eff efSend esSend) x`. We can use the higher order parameters while
+-- calculating a value for `x`.
 runFS = interpret \sender (Open path action) ->
-  -- The other thing that changes is the return type. Instead of returning an
-  -- `Eff ef es x`, we return an `Eff ef es (Eff efSend esSend x)`. The *send
-  -- types represent the effect stack where the effect was sent. We're creating
-  -- a computation where the interpreter was running to create a computation
-  -- where the effect stack was sent to create the value that our program needs
-  -- to continue. We have to use `sender` so that the `EIO` constraint in `es`
-  -- can be used in `esSend`. When you use `sender`, you'll always get the
-  -- original effect. It doesn't really matter with `EIO`, but imagine we were
-  -- doing `sender @(Input String)`. Also imagine that `esSend` was equal to
-  -- `Input String : es`. Now we have a predicament. We know there's an `Input
-  -- String` within `es` (`sender` only works when that's true) but we also
-  -- have a higher `Input String` on the stack. Which interpreter would run?
-  -- Although not all effect systems agree on this, Theseus picks the one
-  -- somewhere in `es`. It's this behavior which makes `using` work. This
-  -- behavior also prevents spooky action at a distance and leaking effect
-  -- implementations. If you want the other behavior, you should add a `Member`
-  -- constraint to the GADT. Then you won't have to use `sender` and the
-  -- highest interpreter will be used. That would look like
-  -- ``Open :: EIO `Member` es => ...``.
+  -- We have to use `sender` so that the `EIO` constraint from `es` can be used
+  -- in `esSend`. When you use `sender`, you'll always get the original effect.
+  -- It doesn't really matter with `EIO`, but imagine we were doing
+  -- `sender @(Input String)`. Also imagine that `esSend` were equal to
+  -- `Input String : es`. Now we have a predicament. We know there's an
+  -- `Input String` within `es` (`sender` only works when that's true) but we
+  -- also have the `Input String` outside of `es`. The two might have different
+  -- interpreters. Which would run? Although not all effect systems agree on
+  -- this, Theseus picks the one somewhere in `es`. It's this behavior which
+  -- makes `using` work. This behavior also prevents spooky action at
+  -- a distance and leaking effect implementations. If you want the other
+  -- behavior, you should add a `Member` constraint to the GADT. Then you won't
+  -- have to use `sender` and the highest interpreter will be used. That would
+  -- look like ``Open :: EIO `Member` es => ...``. That also makes it clear to
+  -- users of your effect that they have control over how the effect will be
+  -- interpreted
   pure $ sender @EIO $ withFile path action
 
--- That was a lot! We went through a whirlwind of features. To summarize, we
--- saw how higher order effects work and how `resource` allows us to run
+-- That was a lot! We went through a bunch of features. To summarize, we saw
+-- how higher order effects work and how `resource` allows us to run
 -- finalizers. As an aside, you might be wondering how `withFile` (and
 -- consequently `Open`) work when something like the `Choice` effect is used.
 -- It turns out perfectly fine! I won't get into the details here (effects
