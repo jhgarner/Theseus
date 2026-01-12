@@ -25,5 +25,5 @@ newtype ComposeCf f eff g a = ComposeCf {getComposeCf :: f (g a)}
 instance Functor m => ControlFlow (ComposeCf m) Anything where
   ComposeCf mfab `cfApply` fa = ComposeCf $ fmap (<*> fa) mfab
   ComposeCf mfa `cfBind` afb = ComposeCf $ fmap (>>= afb) mfa
-  cfMap _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa
+  cfMap _ _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa
   cfRun _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa

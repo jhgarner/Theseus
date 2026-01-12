@@ -19,7 +19,7 @@ testError = do
         catch (throw ()) (\() -> pure "failure")
     describe "When not recovering" do
       it "Ignores the catching block" do
-        Nothing @() === runEff $ runCatchNoRecovery do
+        Nothing @() === runEff $ unrestrict @Traversable $ runCatchNoRecovery do
           catch (throw ()) (undefined :: () -> _)
     describe "State is preserved past a throw" do
       it "When runCatch happens after runState" do

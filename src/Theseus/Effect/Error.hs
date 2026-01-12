@@ -43,7 +43,7 @@ instance ControlFlow (Thrown e) Anything where
   -- Note how it ignores the rhs of these operations. It acts a lot like Const.
   Thrown e f `cfApply` _ = Thrown e f
   Thrown e f `cfBind` _ = Thrown e f
-  cfMap _ handler (Thrown e f) = Thrown e $ handler f
+  cfMap _ _ handler (Thrown e f) = Thrown e $ handler f
 
   -- Note that we don't ignore the handler. This is because `cfRun` requires
   -- that the `handler` parameter be used linearly.
@@ -75,7 +75,7 @@ takeError = either Left Left
 
 -- | Like `runCatch` except it completely ignores the catching block. If
 -- anything throws, the entire computation finishes with `Nothing`.
-runCatchNoRecovery :: (ef Maybe, forall w. Traversable w => ef w) => Eff Traversable (Catch : es) a -> Eff ef es (Maybe a)
+runCatchNoRecovery :: (ef Maybe, ef `IsAtLeast` Traversable) => Eff ef (Catch : es) a -> Eff ef es (Maybe a)
 runCatchNoRecovery = interpretRaw (pure . pure) \(Catch action _) _ next -> do
   ran <- runCatchNoRecovery $ runMaybeCf $ next $ MaybeCf $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
@@ -115,5 +115,5 @@ newtype MaybeCf eff f a = MaybeCf {runMaybeCf :: f (Maybe a)}
 instance ControlFlow MaybeCf Traversable where
   MaybeCf fmab `cfApply` fa = MaybeCf $ (\mab a -> fmap ($ a) mab) <$> fmab <*> fa
   MaybeCf fma `cfBind` afb = MaybeCf $ fma >>= traverse afb
-  cfMap _ efToOut (MaybeCf fa) = MaybeCf $ efToOut fa
-  cfRun _ handler (MaybeCf fa) = MaybeCf $ sequenceA <$> handler fa
+  cfMap _ _ efToOut (MaybeCf fa) = MaybeCf $ efToOut fa
+  cfRun (Implies imply) handler (MaybeCf fa) = imply \(Iso lr rl) -> MaybeCf $ fmap rl . sequenceA . lr <$> handler fa

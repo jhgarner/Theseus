@@ -1,11 +1,3 @@
-{-# LANGUAGE QuantifiedConstraints #-}
-
--- Since I'm doing scary things with foralls and constraints, The "use id"
--- HLint only works when DeepSubsumption is turned on. In this module, enabling
--- DeepSubsumption causes a ton of code to stop compiling, so I'm ignoring the
--- lint.
-{- HLINT ignore "Use id" -}
-
 module Theseus.Eff (
   -- Welcome to Theseus's main documentation page. If you haven't already,
   -- check out the Github page's Readme for tutorials and explanations about
@@ -16,6 +8,11 @@ module Theseus.Eff (
   ControlFlow (..),
   Anything,
   Implies (..),
+  Iso (..),
+  IsoSome (..),
+  isoSomeId,
+  isoImplying,
+  IsAtLeast (..),
   implying,
   Effect,
   Freer (Pure, Impure),
@@ -51,6 +48,7 @@ module Theseus.Eff (
 ) where
 
 import Control.Monad.Identity
+import Theseus.Constraints
 import Theseus.EffType
 import Theseus.Interpreters
 import Theseus.Union

@@ -16,7 +16,7 @@ import Theseus.Effect.Input
 -- management. Although it's not interacting with real IO to read the file, you
 -- can still trace it doing what it should through the printlns.
 testFileExample :: IO ()
-testFileExample = void $ runEffIO $ runCollect $ collect $ runFS $ do
+testFileExample = void $ runEffIO $ unrestrict @Traversable $ runCollect $ collect $ runFS $ do
   file <- pure "a.txt" <|> pure "b.txt"
   withFile file \handle -> do
     contents <- readHandle handle

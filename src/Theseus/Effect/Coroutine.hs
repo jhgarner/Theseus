@@ -10,7 +10,7 @@ import Theseus.Eff
 -- changed. It's important though that the thread only be resumed once assuming
 -- you want preserve the property that handler ordering doesn't change anything.
 
--- | Gives yuo a way to pause the computation until later.
+-- | Gives you a way to pause the computation until later.
 data Coroutine a b m c where
   Yield :: a -> Coroutine a b m b
 
@@ -36,5 +36,5 @@ newtype Yielding b eff m c = Yielding {yielded :: b -> m c}
 instance ControlFlow (Yielding b) Anything where
   Yielding bmc `cfApply` fa = Yielding \b -> bmc b <*> fa
   Yielding bmc `cfBind` afb = Yielding $ bmc >=> afb
-  cfMap _ handler (Yielding bmc) = Yielding $ handler . bmc
+  cfMap _ _ handler (Yielding bmc) = Yielding $ handler . bmc
   cfRun _ handler (Yielding bmc) = Yielding $ handler . bmc

@@ -5,6 +5,7 @@
 module Theseus.EffType where
 
 import Data.Kind (Constraint, Type)
+import Theseus.Constraints
 import Theseus.Union
 
 -- # Theseus' Core
@@ -203,7 +204,7 @@ import Theseus.Union
 -- | This is the kind of the `ef` and `r` type variables that you see around.
 -- It's constraint on how other interpreters can manipulate return types.
 -- `Anything` and `Traversable` are common. `Anything` means that other
--- interpreters can modify te return type any way they want. `Traversable`
+-- interpreters can modify the return type any way they want. `Traversable`
 -- means other interpreters must keep the return type accessible, although they
 -- may change how many of something there are. It might be interesting to try
 -- other classes like `Functor` or a theoretical `LinearTraversable`. They
@@ -246,7 +247,7 @@ data Freer :: Out -> [Effect] -> Type -> Type where
     -- value that our computation needs to continue running is of type `x`.
     -- When an effect is first sent, the *send variables will be the same as
     -- the other variables. That will change as effects are interpreted.
-    (Union es (Eff efSend esSend) x) ->
+    Union es (Eff efSend esSend) x ->
     -- This parameter was not in the introduction above. It is a proof that any
     -- effects that are in scope when the state is being interpreted are in
     -- scope when the effect is sent. It's equivalent to a quantified
@@ -259,17 +260,29 @@ data Freer :: Out -> [Effect] -> Type -> Type where
     -- constraint that the control flow puts on other interpreters. These all
     -- combine to say that the continuation works with any control flow.
     ( forall cf eff r.
-      -- These constraints tell us that `cf` is a control flow. The quantified
-      -- constraint says that we can satisfy `cf`'s requirements using whatever
-      -- `ef` is.
-      (ControlFlow cf r, forall y. ef y => r y) =>
+      ControlFlow cf r =>
+      -- Why not just say that `r` (the constraint that our control flow puts
+      -- on return types) and `ef` (the constraint that `Freer` is actually
+      -- tracking) are the same? Imagine we did `runChoice $ runState $ ...`.
+      -- The `runState` uses `Anything` as its constraint. If `r` and `ef` were
+      -- the same, then the result of `runState` would need to be `Eff Anything
+      -- '[Choice] a`. Now we have a problem though because `runChoice`
+      -- requires that the constraint be `Traversable`. We can's safely change
+      -- from a less constrained constraint to a more constrained one, so we
+      -- become stuck. The solution is to instead require that whatever `ef`
+      -- actually is, it's at least as powerful as `r`. Since all types that
+      -- implement `Traversable` also implement `Anything`, `runState` can work
+      -- with an `Eff Traversable ...` just fine. The downside to all this is
+      -- that we get some ambiguous types. Luckily it's not hard to fix those,
+      -- it just requires some explicit types when you call `unrestrict`.
+      ef `Implies` r ->
       -- Once again we pass around an explicit proof of `Member`ship. Since the
       -- effect we're interpreting is in scope when the interpreter runs, we
       -- can also assume it is in scope when the effect is sent. This isn't
-      -- normally included in `freer` types, but it's practically very useful.
+      -- normally included in `freer` types, but it's practically useful.
       eff `IsMember` es ->
       -- Finally we have the parameter and return type for the continuation
-      -- that we saw in the introduction (although specialized for Freer/Eff)
+      -- that we saw in the introduction (although specialized for Freer/Eff).
       cf eff (Eff efSend esSend) x ->
       cf eff (Eff ef es) a
     ) ->
@@ -281,28 +294,18 @@ instance Applicative (Freer ef es) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff lift next <*> m = Impure eff lift \member x -> next member x `cfApply` Eff m
+  Impure eff lift next <*> m = Impure eff lift \implies member x -> next implies member x `cfApply` Eff m
 
 instance Monad (Freer ef es) where
   Pure ma >>= fmb = fmb ma
-  Impure eff lift next >>= fmb = Impure eff lift \member x -> next member x `cfBind` (Eff . fmb)
-
--- | This adds a single effect to the computation. You can use the `Member`
--- class to convert an effect into a Union, then using `lift` to convert it
--- into a Freer. The `send` function does all this for you so you probably
--- don't need to call lift manually.
-lift :: Union es (Eff ef es) a -> Freer ef es a
-lift f = Impure f id \_ x -> x
-
--- There are some other functions for manipulating `Freer`s, but first let's
--- look at the real `ControlFlow` class.
+  Impure eff lift next >>= fmb = Impure eff lift \implies member x -> next implies member x `cfBind` (Eff . fmb)
 
 -- | This `ControlFlow` class is essential to how Theseus works. When an
 -- interpreter wants to resume a computation that paused waiting for a value
 -- `a`, it provides the `a`s wrapped in something that implements
 -- `ControlFlow`. To be clear, data types that implement ControlFlow are
 -- completely different from the data types that represent effects. Many
--- Effects can use the same ContrFlow, and a single Effect can be implemented
+-- Effects can use the same ControlFlow, and a single Effect can be implemented
 -- in different ways using different control flows. The vast majority of
 -- Effects will use the Identity ControlFlow which threads around a single
 -- computation. Some, like the one used by Choice, will keep track of multiple
@@ -313,7 +316,7 @@ lift f = Impure f id \_ x -> x
 -- `ControlFlow` implementations are very close to higher order functors. This
 -- class actually started with HFunctor as a superclass. That changed though so
 -- that the ControlFlows could be more specialized and make more assumptions
--- about the functor they contain. In general it's all very adhoc.
+-- about the things they contain. In general it's all very adhoc.
 --
 -- The `r` parameter is the constraint `cf` puts on `wrap` in `cfRun`. In
 -- `Freer`, it's tracked by the `ef` variable.
@@ -325,7 +328,9 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   -- a tool for type tetris. It gives us a way of manipulating the `ef` and
   -- `es` parameters when we aren't interpreting effects.
   cfMap ::
-    (eff `Member` outEs, forall w. ef w => outEf w) =>
+    -- These two `Implies` parameters tell us that `outEf` will be something
+    -- between `ef` and `r`
+    ef `Implies` outEf ->
     outEf `Implies` r ->
     (forall x. Eff ef es x -> Eff outEf outEs x) ->
     cf eff (Eff ef es) a ->
@@ -337,48 +342,22 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   -- result. Most common after `Anything` is `Traversable` so that you can
   -- partially inspect whatever is stored within.
   cfRun ::
-    -- These constraints and the first `Implies` parameter tell the `cf` that
-    -- we're not doing anything to the `ef` and `es` variables that an
-    -- interpreter wouldn't do. I don't like this very much, but I'm not sure
-    -- what a better option looks like.
-    (eff `Member` es, forall f. ef f => outEf f, r wrap) =>
-    outEf `Implies` r ->
-    -- | This parameter must be used linearly. Failing to call it causes
+    (eff `Member` es, ef wrap) =>
+    ef `Implies` r ->
+    -- | This function must be used linearly. Failing to call it causes
     -- finalizers to not be run. Calling it more than once causes local
     -- reasoning to fail. Since I'm not using the Linear Types extension,
     -- implementors must be careful.
-    (forall x. Eff ef es x -> Eff outEf outEs (wrap x)) ->
+    (forall x. Eff ef es x -> Eff ef outEs (wrap x)) ->
     cf eff (Eff ef es) a ->
-    cf eff (Eff outEf outEs) (wrap a)
+    cf eff (Eff ef outEs) (wrap a)
 
--- | Quantified Constraints are really annoying to have in your type signatures
--- because the compiler gives them extra high priority. For example,
---
--- ```haskell
--- broken :: (forall w. Traversable w => Functor w) => IO Int
--- broken = fmap read readLn
--- ```
---
--- fails to compile because the quantified constraint overrides `IO`'s `Functor`
--- instance. The compiler won't backtrack, so you'll get a compiler error
--- because `IO` doesn't implement `Traversable`.
---
--- This data type turns the quantified constraint into normal data that the
--- compiler won't try to automatically pass around. By pattern matching and
--- using the provided function, you can pick and choose where the quantified
--- constraint applies.
-data ef `Implies` c where
-  Implies :: (forall x. ((forall w. ef w => c w) => x) -> x) -> ef `Implies` c
-
-implying :: (forall w. ef w => c w) => ef `Implies` c
-implying = Implies id
-
--- | A class that all types implement. It's mostly helpful when implementing
--- ControlFlow when your control flow type has to restrictions on what it can
--- thread around.
-class Anything (f :: Type -> Type)
-
-instance Anything f
+-- | This adds a single effect to the computation. You can use the `Member`
+-- class to convert an effect into a Union, then using `lift` to convert it
+-- into a Freer. The `send` function does all this for you so you probably
+-- don't need to call lift manually.
+lift :: Union es (Eff ef es) a -> Freer ef es a
+lift f = Impure f id \_ _ x -> x
 
 -- | Adds an extra unused effect onto the top of an effectful computation. This
 -- is helpful when you want to hide certain effects from pieces of code. For example,
@@ -411,9 +390,9 @@ raise (Eff act) = Eff case act of
         -- can use that doesn't make everything gross?
         IsMember _ -> error "Raise can't use eff"
     )
-    $ \case
+    $ \implies -> \case
       {- HLINT ignore "Avoid lambda" -}
-      Deeper member -> \x -> withProof member $ cfMap implying raise $ next member x
+      Deeper member -> \x -> withProof member $ cfMap idImply implies raise $ next implies member x
       IsMember _ -> error "Impossible raise condition"
  where
   raiseUnion :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
@@ -424,9 +403,9 @@ raise (Eff act) = Eff case act of
 -- stack. This allows you to add private effects to the stack.
 raiseUnder :: forall e eff ef es a. Eff ef (eff : es) a -> Eff ef (eff : e : es) a
 raiseUnder (Eff (Pure a)) = Eff $ pure a
-raiseUnder (Eff (Impure @_ @_ @esSend eff lifter next)) = Eff $ Impure (raiseUnderUnion eff) lifter' \case
-  IsMember _ -> cfMap implying raiseUnder . next getProof
-  Deeper (Deeper proof) -> \x -> withProof proof $ cfMap implying raiseUnder $ next (Deeper proof) x
+raiseUnder (Eff (Impure @_ @_ @esSend eff lifter next)) = Eff $ Impure (raiseUnderUnion eff) lifter' \implies -> \case
+  IsMember _ -> cfMap idImply implies raiseUnder . next implies getProof
+  Deeper (Deeper proof) -> \x -> withProof proof $ cfMap idImply implies raiseUnder $ next implies (Deeper proof) x
   Deeper (IsMember _) -> error "Impossible raiseUnder + membership proof"
  where
   lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)

@@ -1,10 +1,8 @@
-{-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE TypeFamilyDependencies #-}
-
 module Theseus.Interpreters where
 
 import Control.Monad.Identity
 import Data.Bifunctor (Bifunctor (first))
+import Theseus.Constraints
 import Theseus.EffType
 import Theseus.Union
 
@@ -154,28 +152,28 @@ data VoidEffect :: Effect
 -- effects that manipulate the control flow.
 finally :: ef Identity => Eff ef es () -> Eff ef es a -> Eff ef es a
 finally final (Eff (Pure a)) = final >> pure a
-finally final (Eff (Impure eff lifter next)) = Eff $ Impure eff lifter \member x ->
-  fmap runIdentity $ withProof member $ cfRun implying (fmap Identity . finally final) $ next member x
+finally final (Eff (Impure eff lifter next)) = Eff $ Impure eff lifter \imply member x ->
+  fmap runIdentity $ withProof member $ cfRun imply (fmap Identity . finally final) $ next imply member x
 
 -- | Interprets an effect with maximum flexibility. Unless your effect
 -- interpretation changes the control flow in strange ways, you probably want
 -- one of the other interpreter functions. This one is easier to use
 -- incorrectly.
 interpretRaw ::
-  forall a wrap eff ef es outEf cf someEf.
-  (outEf wrap, forall w. ef w => outEf w, ControlFlow cf someEf, (forall f. ef f => someEf f)) =>
-  (forall x. x -> Eff outEf es (wrap x)) ->
+  forall a wrap eff ef es cf someEf.
+  (ef wrap, ControlFlow cf someEf, (ef `IsAtLeast` someEf)) =>
+  (forall x. x -> Eff ef es (wrap x)) ->
   -- | The continuation paramter MUST be used linearly. If you call it
   -- multiple times, the semantics will be confusing. If you call it zero
   -- times, finalizers will not run.
   HandlerRaw eff ef es cf wrap ->
   Eff ef (eff : es) a ->
-  Eff outEf es (wrap a)
+  Eff ef es (wrap a)
 interpretRaw wrap f (Eff act) = case act of
   Pure a -> wrap a
-  Impure (This e) lifter next -> unrestrict $ f e (liftIt lifter) (next getProof)
-  Impure (That rest) lifter next -> Eff $ Impure rest (lifter . Deeper) \member x ->
-    withProof member (cfRun implying (interpretRaw wrap f)) $ next (Deeper member) x
+  Impure (This e) lifter next -> unrestrict $ f e (liftIt lifter) (next implyAtLeast getProof)
+  Impure (That rest) lifter next -> Eff $ Impure rest (lifter . Deeper) \imply member x ->
+    withProof member (cfRun imply (interpretRaw wrap f)) $ next imply (Deeper member) x
 
 type HandlerRaw eff ef es cf wrap =
   ( forall a esSend efSend x.
@@ -196,9 +194,10 @@ liftIt f = withProof (f getProof)
 -- | Allows us to weaken the constraint on Eff. For example, you can turn
 -- a Traversable constraint into an Anything constraint. The other direction is
 -- not possible.
-unrestrict :: forall ef newEf es a. (forall a. ef a => newEf a) => Eff ef es a -> Eff newEf es a
+unrestrict :: forall ef newEf es a. ef `IsAtLeast` newEf => Eff ef es a -> Eff newEf es a
 unrestrict (Eff (Pure a)) = Eff $ Pure a
-unrestrict (Eff (Impure eff lift continue)) = Eff $ Impure eff lift \member -> withProof member (cfMap implying unrestrict) . continue member
+unrestrict (Eff (Impure eff lift continue)) = Eff $ Impure eff lift \implying member ->
+  withProof member (cfMap implyAtLeast implying unrestrict) . continue (transImply implyAtLeast implying) member
 
 -- | The simplest control flow. It represents a straight line or a single
 -- thread.
@@ -208,29 +207,30 @@ newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
 instance ControlFlow IdentityCf Anything where
   IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
   IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
-  cfMap _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa
+  cfMap _ _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa
   cfRun _ handler (IdentityCf fa) = IdentityCf $ handler fa
 
 -- | Replaces one interpretation with another.
 interposeRaw ::
-  (eff `Member` es, outEf wrap, forall w. ef w => outEf w) =>
+  (eff `Member` es, ef wrap, ControlFlow cf someEf) =>
+  ef `Implies` someEf ->
   (forall x. x -> wrap x) ->
-  IHandlerRaw eff ef es wrap ->
+  IHandlerRaw eff ef es cf wrap ->
   Eff ef es a ->
-  Eff outEf es (wrap a)
-interposeRaw ret f (Eff act) = case act of
+  Eff ef es (wrap a)
+interposeRaw topImply ret f (Eff act) = case act of
   Pure a -> pure $ ret a
   Impure union lifter next -> case prj union of
-    Just eff -> unrestrict $ f eff (liftIt lifter) (next getProof)
-    Nothing -> Eff $ Impure union lifter \member ->
-      withProof member (cfRun implying (interposeRaw ret f)) . next member
+    Just eff -> unrestrict $ f eff (liftIt lifter) (next topImply getProof)
+    Nothing -> Eff $ Impure union lifter \imply member ->
+      withProof member (cfRun imply (interposeRaw topImply ret f)) . next imply member
 
 -- | A handler for an interposition.
-type IHandlerRaw eff ef es wrap =
+type IHandlerRaw eff ef es cf wrap =
   ( forall esSend efSend x a.
     eff `Member` es =>
     eff (Eff efSend esSend) x ->
     Sender es esSend ->
-    (forall cf someEf. (ControlFlow cf someEf, forall a. ef a => someEf a) => cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->
+    (cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->
     Eff ef es (wrap a)
   )

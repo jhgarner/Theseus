@@ -22,16 +22,7 @@ common shared
 
   build-depends:
     base ^>=4.21.0.0,
-    constraints,
-    distributive,
-    functor-combinators,
     mtl,
-    pointed,
-    selective,
-    semigroupoids,
-    transformers,
-    unliftio-core,
-    template-haskell,
 
   default-extensions:
     BlockArguments
@@ -45,6 +36,7 @@ library
   exposed-modules:
     Theseus.Eff
     Theseus.EffType
+    Theseus.Constraints
     Theseus.Interpreters
     Theseus.Effect.Choice
     Theseus.Effect.Coroutine
