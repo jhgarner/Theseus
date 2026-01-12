@@ -39,18 +39,17 @@ import Theseus.Effect.State
 -- and fairly simple. In general you should never be afraid of introducing new
 -- effects.
 
--- Effects are defined as GADTs. This can feel a bit like an abuse of notation.
--- An effect consists of a bundle of operations. Each operation has a function
--- signature; they'll take parameters and return something. GADTs are an
--- extremely convenient way of representing that. Each constructor of a GADT
--- represents an operation, and the syntax for defining a constructor is
--- remarkably close to that of a function signature. You can even write
--- polymorphic functions with constraints as GADT constructors. The illusion
--- breaks down a bit when you see the return type of the GADT constructor. The
--- return type will consist of the effects name followed by a mysterious `m`
--- parameter (which we'll explain later in the tutorial) followed by the actual
--- return type of the function. Anyway, when you see a GADT of kind `Effect`,
--- look past the GADT and think about operations and functions signatures.
+-- An effect consists of a bundle of functions. We define that bundle using
+-- a GADT. This can feel a bit like an abuse of notation, but GADTs are
+-- a convenient way of representing them. Each constructor of a GADT represents
+-- an operation, and the syntax for defining a constructor is remarkably close
+-- to that of a function signature. You can even write polymorphic functions
+-- with constraints as GADT constructors. The illusion breaks down a bit when
+-- you see the return type of the GADT constructor. The return type will
+-- consist of the effect's name followed by a mysterious `m` parameter (which
+-- we'll explain later in the tutorial) followed by the actual return type of
+-- the function. Anyway, when you see a GADT of kind `Effect`, look past the
+-- GADT and think about the bundle of functions.
 data Terminal :: Effect where
   WriteLine :: String -> Terminal m ()
   ReadLine :: Terminal m String
@@ -58,7 +57,7 @@ data Terminal :: Effect where
 -- Now for some functions that trigger our effect. Most effect systems use
 -- template haskell to generate these. Theseus doesn't have that yet. They're
 -- boring boilerplate, but we'll use them to show a couple new concepts. Effect
--- systems keep separate triggering effects from interpreting them. Code can
+-- systems keep triggering effects separate from interpreting them. Code can
 -- trigger effects without saying anything about how they'll be interpreted.
 -- This is what makes effect systems so useful for testing. The same code can
 -- trigger effects that'll be interpreted using, for example, real database
@@ -156,11 +155,11 @@ runTest = void . runEffIO . runHSpec
 
 -- And here's our test implementation of `Terminal`. It accepts a list of lines
 -- as input and returns the list of lines that were output. Note the new `ef
--- (OutputResult [String])` constraint. Internally our interpreter uses an
--- `Output` interpreter that changes the return type of the computation (it adds
--- the output to the returned value). The constraint ensures that any other
--- effect interpreters will be OK with that. They all should be, but we need
--- the constraint so Haskell can verify that.
+-- (OutputResult [String])` constraint. Internally our interpreter will use an
+-- `Output` interpreter that changes the return type of the computation (it
+-- adds the output to the returned value). The constraint ensures that any
+-- other effect interpreters will be OK with that. They all should be, but we
+-- need the constraint so Haskell can verify it.
 runTerminalMock ::
   (HSpec `Member` es, ef (OutputResult [String]), ef Identity) =>
   [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
@@ -179,16 +178,16 @@ runTerminalMock stdin action = do
   -- effect above it in the stack. That's what `Member` does: it finds effects
   -- in the stack and exposes them. If it's in the stack, you can use `Member`
   -- to find it. That makes every effect in the stack "public". If anyone can
-  -- use `Member` to find it, everyone can. Now imagine the interpretation
-  -- we're defining now. We rely on an `Output [String]` to track the list of
-  -- printed lines. We could add ``Output [String] `Member` es`` to the type
-  -- signature up above. If we do that though, there's nothing stopping other
-  -- code from also adding ``Output [String] `Member` es`` and using the output
-  -- as well. The `Output [String]` effect is so generic that maybe some other
-  -- effect is using it for logging. Everything would look fine until we added
-  -- logging to our `thrice` function. Suddenly we'd have logs and captured
-  -- stdout mixed into the same list! That would break our test and be a huge
-  -- pain to debug.
+  -- use `Member` to find it, everyone can. Let's see why that's a problem for
+  -- `runTerminalMock`. This interpreter relien on an `Output [String]` to
+  -- track the list of printed lines. We could have added ``Output [String]
+  -- `Member` es`` to the type signature up above. If we'd done that though,
+  -- there's nothing stopping other code from also adding ``Output [String]
+  -- `Member` es`` and using the output as well. The `Output [String]` effect
+  -- is so generic that maybe some other effect might use it for logging.
+  -- Everything would look fine until we added logging to our `thrice`
+  -- function. Suddenly we'd have logs and captured stdout mixed into the same
+  -- list! That would break our test and be a huge pain to debug.
   --
   -- What we'd like to do instead is say that this `Output [String]` can only
   -- be used by this interpreter for `Terminal`. Other code might output to
@@ -204,8 +203,9 @@ runTerminalMock stdin action = do
   -- carefully controlling when effects are added to the stack, we can
   -- effectively hide them until they're needed.
   --
-  -- We're introducing two private effects. The State keeps track of what input
-  -- still needs to be read, and the output keeps track of what was printed.
+  -- We've introduced two private effects to `runTerminalMock`. The State keeps
+  -- track of what input still needs to be read, and the output keeps track of
+  -- what was printed.
   (unusedInput, output) <- with action $ using (runState stdin . runOutput @[String]) $ interpret_ \case
     WriteLine line -> output [line]
     ReadLine -> do
@@ -309,18 +309,17 @@ withFile path action = with (action OpenFile) $ using (resource open close) $ in
 
 data FS :: Effect where
   -- Remember that `m` parameter on our effects from before? Now we're using
-  -- it! The first type parameter of an effect is `Eff` when the effect is
-  -- being sent. We can call it `m` when we don't really care what it is, and
-  -- we can call it `Eff ef es` when we do. It's important to realize that this
-  -- is not the same `es` as we see in the interpreter's type signature.
-  -- Functions like `interpret` and `using` manipulate the effect stack and
-  -- introduce new scopes. There might be effects which are on the effect stack
-  -- and in scope where the effect is sent, but which aren't in scope where the
-  -- effect is being interpreted. The opposite can be true when private effects
-  -- are used. That makes higher order effects trickier to interpret. The
-  -- difference between the send effect stack and the interpret effect stack is
-  -- subtle but really important, so I'll repeat it a few times in different
-  -- ways as we go.
+  -- it! We can call it `m` when we don't really care what it is, and we can
+  -- call it `Eff ef es` when we do. It's important to realize that this is not
+  -- the same `es` as we see in the interpreter's type signature. Functions
+  -- like `interpret` and `using` manipulate the effect stack and introduce new
+  -- scopes. There might be effects which are on the effect stack and in scope
+  -- where the effect is sent, but which aren't in scope where the effect is
+  -- being interpreted. The opposite can be true when private effects are used.
+  -- That makes higher order effects trickier to interpret. The difference
+  -- between the send effect stack and the interpret effect stack is subtle but
+  -- really important, so I'll repeat it a few times in different ways as we
+  -- go.
   Open ::
     ef Identity =>
     FilePath ->
