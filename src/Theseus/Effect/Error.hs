@@ -105,7 +105,7 @@ newtype MaybeCf eff f a = MaybeCf {runMaybeCf :: f (Maybe a)}
 -- the `Applicative` constraint from the `traverse` function, and the latter
 -- would only require a `Pure` typeclass. There's also probably something fun
 -- to do with `Comonad` to say that it's OK to duplicate or drop the wrapper.
--- That also seems to related to linearity. We could argue that
+-- That also seems to be related to linearity. We could argue that
 -- `data StateOutput s a = SO s a` is not a `Comonad` because duplicating or
 -- dropping the state leads to strange semantics. That would prevent certain
 -- effect orderings at compile time. We could have an `UnliftIO` effect which

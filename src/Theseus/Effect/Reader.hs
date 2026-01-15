@@ -58,8 +58,8 @@ localReader f = interpret \sender -> \case
   Local newF m -> pure $ sender @(Reader r) $ localReader (newF . f) m
 
 -- | This is a version of Reader which completely ignores the function passed
--- to local. It's pointless and you should never use it, but it illustrates one
--- of the challenges with Coroutine.
+-- to local. It's pointless and you should never use it, but it's convenient
+-- for some `Coroutine` tests.
 runReaderNoLocal :: ef Identity => r -> Eff ef (Reader r : es) a -> Eff ef es a
 runReaderNoLocal @_ @r r = interpret \sender -> \case
   Ask -> pure $ pure r

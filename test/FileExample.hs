@@ -28,6 +28,7 @@ testFileExample = void $ runEffIO $ unrestrict @Traversable $ runCollect $ colle
     writeHandle handle somethingElse
 
 -- The above program prints:
+-- ```
 -- Opening file a.txt
 -- I'm reading from a.txt
 -- read: Pretend like I'm doing real IO
@@ -40,6 +41,7 @@ testFileExample = void $ runEffIO $ unrestrict @Traversable $ runCollect $ colle
 -- I'm writing "left" to b.txt
 -- I'm writing "right" to b.txt
 -- closing b.txt now
+-- ```
 
 -- The rest of this file is a dummy filesystem effect. It doesn't interact with
 -- real files, but it follows the flow of something that would and it prints

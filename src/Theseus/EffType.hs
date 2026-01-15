@@ -31,15 +31,15 @@ import Theseus.Union
 -- continuation. Keep doing that recursively on the output of the continuation
 -- until you have only a `Pure` value.
 --
--- One really cool property I want to point out about this `Freer` is how the
--- `f` never needs to change until it's ready to be interpreted. We drop the
--- `f` into the `Impure` constructor, and until we're ready to interpret it
--- nothing changes. This is different from the `Free` monad where every `bind`
--- operation means calling `map` on the `f` to change it. Not having to change
--- `f` before interpretation is cool because it means we make fewer assumptions
--- about `f`'s structure. At interpretation time we know exactly what `f` is,
--- so it's easy to manipulate. During operations like `bind`, we don't know
--- exactly what `f` is so we have to embed extra information about `f` being
+-- One really cool property of this `Freer` is how the `f` never needs to
+-- change until it's ready to be interpreted. We drop the `f` into the `Impure`
+-- constructor, and until we're ready to interpret the value stays the same.
+-- This is different from the `Free` monad where every `bind` operation means
+-- calling `map` on the `f` to change it. Not having to change `f` before
+-- interpretation is cool because it means we make fewer assumptions about
+-- `f`'s structure. At interpretation time we know exactly what `f` is, so it's
+-- easy to manipulate. During operations like `bind`, we don't know exactly
+-- what `f` is so we have to embed extra information about `f` being
 -- a `Functor` for things to work.
 --
 -- Back to `Freer`, this works great for first order effects, but it can't
@@ -63,7 +63,7 @@ import Theseus.Union
 -- to only care about `f`, but the recursive interpreter needs to handle `f :+:
 -- g` which means it needs to handle `g` in some way because the `g`s might
 -- contain recursive `HFreer (f :+: g)`s that themselves might contain `f`s
--- that need to be interpreted now.
+-- that need to be interpreted now. That's a messy knot to untangle!
 --
 -- One solution to this is to require that all effects be `HFunctor`s. That
 -- means all our effects have an `hmap :: forall x. f x -> g x` operation which

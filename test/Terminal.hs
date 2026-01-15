@@ -21,7 +21,7 @@ import Theseus.Effect.State
 -- When you use an effect system library, you'll end up with a pyramid of
 -- effects. At the bottom of the pyramid are low level generic effects. Those
 -- are used to implement more specific higher level effects. Instead of only
--- composing functions, you can also think of composing effects. Since effects
+-- composing functions, you can also compose effects. Since effects
 -- can be easily swapped out, you can mock any part of your effect stack. This
 -- makes it easy to write anything ranging from unit tests to integration
 -- tests. In general, functions should have a very small number of effects
@@ -39,6 +39,8 @@ import Theseus.Effect.State
 -- and fairly simple. In general you should never be afraid of introducing new
 -- effects.
 
+-- ### Creating Effects
+
 -- An effect consists of a bundle of functions. We define that bundle using
 -- a GADT. This can feel a bit like an abuse of notation, but GADTs are
 -- a convenient way of representing them. Each constructor of a GADT represents
@@ -54,17 +56,15 @@ data Terminal :: Effect where
   WriteLine :: String -> Terminal m ()
   ReadLine :: Terminal m String
 
--- Now for some functions that trigger our effect. Most effect systems use
+-- Now for some functions that send our effects. Most effect systems use
 -- template haskell to generate these. Theseus doesn't have that yet. They're
 -- boring boilerplate, but we'll use them to show a couple new concepts. Effect
--- systems keep triggering effects separate from interpreting them. Code can
--- trigger effects without saying anything about how they'll be interpreted.
--- This is what makes effect systems so useful for testing. The same code can
--- trigger effects that'll be interpreted using, for example, real database
--- calls, and it can trigger effects that'll be interpreted using a mocked
--- database. One block of code can be interpreted in any number of ways. Note
--- that to match other libraries, we use `send` instead of `trigger` from here
--- on out.
+-- systems separate sending effects from interpreting them. The code that sends
+-- effects says nothing about how the receiver will interpret them. This is
+-- what makes effect systems so useful for testing. Effects sent for a database
+-- call could be interpreted using a real connection, using a mocked database,
+-- or anything else. One block of code can be interpreted in any number of
+-- ways.
 
 -- A few things are introduced in this line. `Eff` is the Monad that our effect
 -- system runs in. The `ef` parameter we'll ignore for now. The `es` parameter
@@ -98,13 +98,15 @@ thrice = do
 
 -- Hopefully that's not too hard to follow. Except for the type signature, it
 -- should look nearly identical to how you'd write it normally. This is code
--- that triggers/sends effects. It says nothing about their interpretation.
--- That means we can reuse it in many ways. To run `thrice` we'll need at least
--- one interpretation, so let's create an interpretation that does what you'd
--- expect: reads and writes to stdin and stdout.
+-- that sends effects; it says nothing about the interpretation. That means we
+-- can reuse it in many ways.
 
--- Here we see our first use of `ef`. Honestly, `ef` is kind of messy and it's
--- best just to add it whenever the compiler errors tell you to. The `ef`
+-- ### Interpreting Effects
+
+-- Let's create our first interpretation doing what you'd expect from
+-- a terminal effect: reading and writing to stdin and stdout.
+
+-- Here we see our first use of `ef`. Honestly, `ef` is kind of messy The `ef`
 -- variable is a Constraint on how interpreters are allowed to modify the
 -- effectful computation's return type. Technical all interpreters wrap the
 -- computation in some Functor. Most of the time that's `Identity`, so the
@@ -126,7 +128,7 @@ runTerminal = interpret_ \case
   ReadLine -> liftIO getLine
 
 -- Now we have everything we need to turn our `thrice` function into something
--- Haskell can actually run. The runEffIO function turns an effect stack that
+-- Haskell can actually run. The `runEffIO` function turns an effect stack that
 -- only contains the `EIO` effect into an IO operation.
 thriceIO :: IO ()
 thriceIO = runEffIO $ runTerminal thrice
@@ -153,13 +155,13 @@ runHSpec = interpret_ \case
 runTest :: Eff Anything [HSpec, EIO] a -> Test.Expectation
 runTest = void . runEffIO . runHSpec
 
--- And here's our test implementation of `Terminal`. It accepts a list of lines
--- as input and returns the list of lines that were output. Note the new `ef
--- (OutputResult [String])` constraint. Internally our interpreter will use an
--- `Output` interpreter that changes the return type of the computation (it
--- adds the output to the returned value). The constraint ensures that any
--- other effect interpreters will be OK with that. They all should be, but we
--- need the constraint so Haskell can verify it.
+-- Our test implementation of `Terminal` accepts a list of lines as input and
+-- returns the list of lines that were output. Note the new `ef (OutputResult
+-- [String])` constraint. Internally our interpreter will use an `Output`
+-- interpreter that changes the return type of the computation (it adds the
+-- output to the returned value). The constraint ensures that any other
+-- interpreters will be OK with that. They all should be, but we need the
+-- constraint so Haskell can verify it.
 runTerminalMock ::
   (HSpec `Member` es, ef (OutputResult [String]), ef Identity) =>
   [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
@@ -171,23 +173,26 @@ runTerminalMock stdin action = do
   -- parentheses in cases like this. The `with` function moves the thing we're
   -- interpreting to the beginning of the line to avoid the parentheses. Second
   -- is the `using` function. It introduces private effects that only this
-  -- interpreter can use.
+  -- interpreter can use. We're introducing two private effects to. The state
+  -- keeps track of what input still needs to be read, and the output keeps
+  -- track of what was printed.
   --
   -- What makes an effect "private" as compared to "public"? Consider the
   -- effect stack (`es`). Any effect on the stack can be used by any other
   -- effect above it in the stack. That's what `Member` does: it finds effects
   -- in the stack and exposes them. If it's in the stack, you can use `Member`
-  -- to find it. That makes every effect in the stack "public". If anyone can
-  -- use `Member` to find it, everyone can. Let's see why that's a problem for
-  -- `runTerminalMock`. This interpreter relien on an `Output [String]` to
-  -- track the list of printed lines. We could have added ``Output [String]
-  -- `Member` es`` to the type signature up above. If we'd done that though,
-  -- there's nothing stopping other code from also adding ``Output [String]
-  -- `Member` es`` and using the output as well. The `Output [String]` effect
-  -- is so generic that maybe some other effect might use it for logging.
-  -- Everything would look fine until we added logging to our `thrice`
-  -- function. Suddenly we'd have logs and captured stdout mixed into the same
-  -- list! That would break our test and be a huge pain to debug.
+  -- to find it. That makes every effect in the stack "public". Let's see why
+  -- that's a problem for `runTerminalMock`. This interpreter relies on an
+  -- `Output [String]` to track the list of printed lines. We could have made
+  -- that dependency public by adding ``Output [String] `Member` es`` to the
+  -- type signature up above. If we'd done that though, there would be nothing
+  -- stopping other code from also adding ``Output [String] `Member` es`` and
+  -- using the output as well. The `Output [String]` effect is so generic that
+  -- maybe some other effect might use it for logging. Everything would look
+  -- fine until we added logging to our `thrice` function (or added some other
+  -- effect to `thrice` which used logging). Suddenly we'd have logs and
+  -- captured stdout mixed into the same list! That would break our test and be
+  -- a huge pain to debug.
   --
   -- What we'd like to do instead is say that this `Output [String]` can only
   -- be used by this interpreter for `Terminal`. Other code might output to
@@ -202,10 +207,6 @@ runTerminalMock stdin action = do
   -- `using` calls behind the scenes) add new effects to the stack. By
   -- carefully controlling when effects are added to the stack, we can
   -- effectively hide them until they're needed.
-  --
-  -- We've introduced two private effects to `runTerminalMock`. The State keeps
-  -- track of what input still needs to be read, and the output keeps track of
-  -- what was printed.
   (unusedInput, output) <- with action $ using (runState stdin . runOutput @[String]) $ interpret_ \case
     WriteLine line -> output [line]
     ReadLine -> do
@@ -255,13 +256,15 @@ testThrice = do
 -- we'll introduce a mix of higher order and first order effects, and show how
 -- they interact.
 
--- Contriving our Terminal example some more, lets say we want to reuse our
--- `thrice` program, but we want it to read and write to files instead of
+-- Contriving our Terminal example some more, lets say we wanted to reuse our
+-- `thrice` program, but we wanted it to read and write to files instead of
 -- stdout and stdin. Keeping `thrice` the exact same, we'll define a new
 -- implementation of `Terminal` (in reality you'd probably not call the effect
 -- Terminal anymore, but for the sake of our example we'll stick with it).
 -- In this example we'll define a first order effect for interacting with
 -- files, then we'll introduce a higher order effect for managing open files.
+
+-- ### Managing File Resources
 
 -- This is just a specially named Proxy. We need it because we'll be using the
 -- `ST` trick to make sure our files can't be used after they're closed.
@@ -305,6 +308,8 @@ withFile path action = with (action OpenFile) $ using (resource open close) $ in
   open = liftIO $ openFile path ReadWriteMode
   close handle = liftIO $ hClose handle
 
+-- ### An Effect for Managing Effects
+
 -- Next let's create a higher order file system effect to open files.
 
 data FS :: Effect where
@@ -317,9 +322,9 @@ data FS :: Effect where
   -- where the effect is sent, but which aren't in scope where the effect is
   -- being interpreted. The opposite can be true when private effects are used.
   -- That makes higher order effects trickier to interpret. The difference
-  -- between the send effect stack and the interpret effect stack is subtle but
-  -- really important, so I'll repeat it a few times in different ways as we
-  -- go.
+  -- between the send effect stack and the interpreter effect stack is subtle
+  -- but really important, so I'll repeat it a few times in different ways as
+  -- we go.
   Open ::
     ef Identity =>
     FilePath ->
@@ -355,11 +360,10 @@ runFS :: (ef Identity, EIO `Member` es) => Eff ef (FS : es) a -> Eff ef es a
 -- effects that are in `es`) to calculate that value. In the higher order case
 -- that's still true: we can still use any effects that are in scope for the
 -- interpreter to calculate a value for `x`. What we gain though is the ability
--- to use effects that are in scope where the effect that we're interpreting
--- was sent (aka effects that are in `esSend`). This allows us to interpret
--- higher order effects because the effect we're interpreting has type
--- `FS (Eff efSend esSend) x`. We can use the higher order parameters while
--- calculating a value for `x`.
+-- to use effects that are in scope where the effect was sent (aka effects that
+-- are in `esSend`). This allows us to interpret higher order effects because
+-- the effect we're interpreting has type `FS (Eff efSend esSend) x`. We can
+-- use the higher order parameters while calculating a value for `x`.
 runFS = interpret \sender (Open path action) ->
   -- We have to use `sender` so that the `EIO` constraint from `es` can be used
   -- in `esSend`. When you use `sender`, you'll always get the original effect.
@@ -397,8 +401,8 @@ runFS = interpret \sender (Open path action) ->
 -- ways of providing a dependency: we can make it private using `using`, we can
 -- make it public to our interpreter (like `FS` in this case or `EIO` in almost
 -- all cases), or we can make it public for the Effect. The last is the most
--- public (all interpreters inherit the dependency) and the first is the least
--- (no one can observe the dependency).
+-- public (all interpreters inherit the dependency and senders can see it) and
+-- the first is the least (no one can observe the dependency).
 runTerminalFile :: (ef Identity, FS `Member` es) => String -> String -> Eff ef (Terminal : es) a -> Eff ef es a
 runTerminalFile input output action = open input \ifile -> open output \ofile -> do
   -- Because of the lambdas, we have to use the lower level `raising` method to
@@ -422,6 +426,8 @@ testFileThrice = do
       -- You'll have to check the repo to verify that "file" is the contents of
       -- the input file.
       output `shouldBe` ["file", "file", "file"]
+
+-- ## The End
 
 -- Thanks for getting this far! If you're new to effect systems, hopefully this
 -- wasn't too whirlwind of a tour. Effect systems are really cool and I hope
