@@ -7,7 +7,7 @@ import Theseus.Eff
 data Input i :: Effect where
   Input :: Input i m i
 
-input :: Input i `Member` es => Eff ef es i
+input :: Input i :> es => Eff ef es i
 input = send Input
 
 runInput :: ef Identity => i -> Eff ef (Input i : es) a -> Eff ef es a

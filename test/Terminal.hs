@@ -73,23 +73,23 @@ data Terminal :: Effect where
 -- code (think all the actions within the same do block) it will remain the
 -- same. You have to introduce new "levels" to change it. We'll see examples of
 -- that when we get to interpreting effects. By making `es` generic, we're
--- saying that (almost) any list of effects will work. The `Member` constraint
+-- saying that (almost) any list of effects will work. The `:>` constraint
 -- limits the list to those that contain `Terminal`. We can only `send` effects
 -- to `Eff` if they're part of the effect stack. All effects that are in the
 -- stack are effects that `Eff` can handle.
 --
 -- It's possible for there to be multiple instances of the same effect in the
--- stack. That's fine! The `Member` constraint will find the topmost one.
-writeLine :: Terminal `Member` es => String -> Eff ef es ()
+-- stack. That's fine! The `:>` constraint will find the topmost one.
+writeLine :: Terminal :> es => String -> Eff ef es ()
 writeLine line = send $ WriteLine line
 
-readLine :: Terminal `Member` es => Eff ef es String
+readLine :: Terminal :> es => Eff ef es String
 readLine = send ReadLine
 
 -- Now let's look at how we can use our effects. We'll implement a program that
 -- reads input from the user and echos what they provided 3 times.
 
-thrice :: Terminal `Member` es => Eff ef es ()
+thrice :: Terminal :> es => Eff ef es ()
 thrice = do
   lineToEcho <- readLine
   writeLine lineToEcho
@@ -119,17 +119,17 @@ thrice = do
 -- require it. If you're not writing one of those effects, just add `ef` to
 -- your interpreter's type signature with whatever value the compiler requires.
 --
--- The other constraint we have is for the `EIO` effect. EIO says that we can
--- lift arbitrary IO operations into `Eff`. When `EIO` is a member of the
+-- The other constraint we have is for the `IOE` effect. IOE says that we can
+-- lift arbitrary IO operations into `Eff`. When `IOE` is a member of the
 -- effect stack, `Eff` implements `MonadIO`.
-runTerminal :: (ef Identity, EIO `Member` es) => Eff ef (Terminal : es) a -> Eff ef es a
+runTerminal :: (ef Identity, IOE :> es) => Eff ef (Terminal : es) a -> Eff ef es a
 runTerminal = interpret_ \case
   WriteLine line -> liftIO $ putStrLn line
   ReadLine -> liftIO getLine
 
 -- Now we have everything we need to turn our `thrice` function into something
 -- Haskell can actually run. The `runEffIO` function turns an effect stack that
--- only contains the `EIO` effect into an IO operation.
+-- only contains the `IOE` effect into an IO operation.
 thriceIO :: IO ()
 thriceIO = runEffIO $ runTerminal thrice
 
@@ -145,14 +145,14 @@ thriceIO = runEffIO $ runTerminal thrice
 data HSpec :: Effect where
   ShouldBe :: (Show a, Eq a) => a -> a -> HSpec m ()
 
-shouldBe :: (Show a, Eq a, HSpec `Member` es) => a -> a -> Eff ef es ()
+shouldBe :: (Show a, Eq a, HSpec :> es) => a -> a -> Eff ef es ()
 shouldBe actual expected = send $ ShouldBe actual expected
 
-runHSpec :: (ef Identity, EIO `Member` es) => Eff ef (HSpec : es) a -> Eff ef es a
+runHSpec :: (ef Identity, IOE :> es) => Eff ef (HSpec : es) a -> Eff ef es a
 runHSpec = interpret_ \case
   ShouldBe actual expected -> liftIO $ actual `Test.shouldBe` expected
 
-runTest :: Eff Anything [HSpec, EIO] a -> Test.Expectation
+runTest :: Eff Anything [HSpec, IOE] a -> Test.Expectation
 runTest = void . runEffIO . runHSpec
 
 -- Our test implementation of `Terminal` accepts a list of lines as input and
@@ -163,7 +163,7 @@ runTest = void . runEffIO . runHSpec
 -- interpreters will be OK with that. They all should be, but we need the
 -- constraint so Haskell can verify it.
 runTerminalMock ::
-  (HSpec `Member` es, ef (OutputResult [String]), ef Identity) =>
+  (HSpec :> es, ef (OutputResult [String]), ef Identity) =>
   [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
 runTerminalMock stdin action = do
   -- Here we see a couple new functions. First is `with` which just rearranges
@@ -179,14 +179,14 @@ runTerminalMock stdin action = do
   --
   -- What makes an effect "private" as compared to "public"? Consider the
   -- effect stack (`es`). Any effect on the stack can be used by any other
-  -- effect above it in the stack. That's what `Member` does: it finds effects
-  -- in the stack and exposes them. If it's in the stack, you can use `Member`
+  -- effect above it in the stack. That's what `:>` does: it finds effects
+  -- in the stack and exposes them. If it's in the stack, you can use `:>`
   -- to find it. That makes every effect in the stack "public". Let's see why
   -- that's a problem for `runTerminalMock`. This interpreter relies on an
   -- `Output [String]` to track the list of printed lines. We could have made
-  -- that dependency public by adding ``Output [String] `Member` es`` to the
+  -- that dependency public by adding ``Output [String] :> es`` to the
   -- type signature up above. If we'd done that though, there would be nothing
-  -- stopping other code from also adding ``Output [String] `Member` es`` and
+  -- stopping other code from also adding ``Output [String] :> es`` and
   -- using the output as well. The `Output [String]` effect is so generic that
   -- maybe some other effect might use it for logging. Everything would look
   -- fine until we added logging to our `thrice` function (or added some other
@@ -200,7 +200,7 @@ runTerminalMock stdin action = do
   -- the stack is ours only. That's where "private" effects come in. A private
   -- effect is one which only appears on the effect stack within the
   -- interpreter. Since its not on the effect stack any other time, no one else
-  -- can access it using `Member` constraints. It makes our code resilient to
+  -- can access it using `:>` constraints. It makes our code resilient to
   -- things like the thrice logging problem. Private effects are not a
   -- fundamental feature of Theseus, but instead arise from how we can
   -- manipulate the effect stack. The `raise` family of functions (which
@@ -275,16 +275,16 @@ data File tag :: Effect where
   ReadLineFrom :: OpenFile tag -> File tag m String
   WriteLineTo :: OpenFile tag -> String -> File tag m ()
 
-readLineFrom :: File tag `Member` es => OpenFile tag -> Eff ef es String
+readLineFrom :: File tag :> es => OpenFile tag -> Eff ef es String
 readLineFrom file = send $ ReadLineFrom file
 
-writeLineTo :: File tag `Member` es => OpenFile tag -> String -> Eff ef es ()
+writeLineTo :: File tag :> es => OpenFile tag -> String -> Eff ef es ()
 writeLineTo file line = send $ WriteLineTo file line
 
 -- This type signature should look pretty normal except for its use of the `ST`
 -- trick.
 withFile ::
-  (ef Identity, EIO `Member` es) =>
+  (ef Identity, IOE :> es) =>
   FilePath ->
   (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
   Eff ef es a
@@ -332,13 +332,13 @@ data FS :: Effect where
     FS (Eff ef es) a
 
 open ::
-  (FS `Member` es, ef Identity) =>
+  (FS :> es, ef Identity) =>
   FilePath ->
   (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
   Eff ef es a
 open path action = send $ Open path action
 
-runFS :: (ef Identity, EIO `Member` es) => Eff ef (FS : es) a -> Eff ef es a
+runFS :: (ef Identity, IOE :> es) => Eff ef (FS : es) a -> Eff ef es a
 -- We're using `interpret` instead of `interpret_`. That changes a couple
 -- things.
 --
@@ -365,9 +365,9 @@ runFS :: (ef Identity, EIO `Member` es) => Eff ef (FS : es) a -> Eff ef es a
 -- the effect we're interpreting has type `FS (Eff efSend esSend) x`. We can
 -- use the higher order parameters while calculating a value for `x`.
 runFS = interpret \sender (Open path action) ->
-  -- We have to use `sender` so that the `EIO` constraint from `es` can be used
+  -- We have to use `sender` so that the `IOE` constraint from `es` can be used
   -- in `esSend`. When you use `sender`, you'll always get the original effect.
-  -- It doesn't really matter with `EIO`, but imagine we were doing
+  -- It doesn't really matter with `IOE`, but imagine we were doing
   -- `sender @(Input String)`. Also imagine that `esSend` were equal to
   -- `Input String : es`. Now we have a predicament. We know there's an
   -- `Input String` within `es` (`sender` only works when that's true) but we
@@ -376,12 +376,12 @@ runFS = interpret \sender (Open path action) ->
   -- this, Theseus picks the one somewhere in `es`. It's this behavior which
   -- makes `using` work. This behavior also prevents spooky action at
   -- a distance and leaking effect implementations. If you want the other
-  -- behavior, you should add a `Member` constraint to the GADT. Then you won't
+  -- behavior, you should add a `:>` constraint to the GADT. Then you won't
   -- have to use `sender` and the highest interpreter will be used. That would
-  -- look like ``Open :: EIO `Member` es => ...``. That also makes it clear to
+  -- look like ``Open :: IOE :> es => ...``. That also makes it clear to
   -- users of your effect that they have control over how the effect will be
   -- interpreted
-  pure $ sender @EIO $ withFile path action
+  pure $ sender @IOE $ withFile path action
 
 -- That was a lot! We went through a bunch of features. To summarize, we saw
 -- how higher order effects work and how `resource` allows us to run
@@ -399,11 +399,11 @@ runFS = interpret \sender (Open path action) ->
 -- implementation possible. Private effect dependencies on the other hand are
 -- useful when you don't want the dependency to be shared. That gives us three
 -- ways of providing a dependency: we can make it private using `using`, we can
--- make it public to our interpreter (like `FS` in this case or `EIO` in almost
+-- make it public to our interpreter (like `FS` in this case or `IOE` in almost
 -- all cases), or we can make it public for the Effect. The last is the most
 -- public (all interpreters inherit the dependency and senders can see it) and
 -- the first is the least (no one can observe the dependency).
-runTerminalFile :: (ef Identity, FS `Member` es) => String -> String -> Eff ef (Terminal : es) a -> Eff ef es a
+runTerminalFile :: (ef Identity, FS :> es) => String -> String -> Eff ef (Terminal : es) a -> Eff ef es a
 runTerminalFile input output action = open input \ifile -> open output \ofile -> do
   -- Because of the lambdas, we have to use the lower level `raising` method to
   -- create our private effects. `raising` uses a class to calculate the

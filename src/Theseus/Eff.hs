@@ -23,7 +23,8 @@ module Theseus.Eff (
   Subset (raising),
   send,
   runEff,
-  Member,
+  (:>),
+  (:>>),
 
   -- * Handling Effects
   using,

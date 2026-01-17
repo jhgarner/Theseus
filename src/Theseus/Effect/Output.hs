@@ -6,7 +6,7 @@ import Theseus.Eff
 data Output w :: Effect where
   Output :: w -> Output w m ()
 
-output :: Output w `Member` es => w -> Eff ef es ()
+output :: Output w :> es => w -> Eff ef es ()
 output w = send $ Output w
 
 type OutputResult w = ((,) w)

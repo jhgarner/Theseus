@@ -37,7 +37,7 @@ testChoice = do
     -- on the outside of a `runChoice` or on the inside.
     describe "State" do
       -- First we need to define the program we'll be running.
-      let program :: forall es. (Choice `Member` es, State String `Member` es) => Eff Traversable es String
+      let program :: forall es. (Choice :> es, State String :> es) => Eff Traversable es String
           program = do
             prefix <- pure "left" <|> pure "right"
             suffix <- pure "left" <|> pure "right"

@@ -28,5 +28,5 @@ yieldCoroutine action =
     Yielded () rest -> rest ()
     Done _ -> error "Coroutine was already done"
 
-unitYield :: Coroutine () () `Member` es => Eff ef es ()
+unitYield :: Coroutine () () :> es => Eff ef es ()
 unitYield = yield @() @() ()

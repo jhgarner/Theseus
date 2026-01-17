@@ -21,8 +21,8 @@ common shared
     -Wno-name-shadowing
 
   build-depends:
-    base ^>=4.21.0.0,
-    mtl,
+    base >=4.21 && <5,
+    mtl >=2.3,
 
   default-extensions:
     BlockArguments
@@ -34,19 +34,19 @@ common shared
 library
   import: shared
   exposed-modules:
+    Theseus.Constraints
     Theseus.Eff
     Theseus.EffType
-    Theseus.Constraints
-    Theseus.Interpreters
     Theseus.Effect.Choice
     Theseus.Effect.Coroutine
     Theseus.Effect.Error
     Theseus.Effect.IO
-    Theseus.Effect.Reader
     Theseus.Effect.Input
     Theseus.Effect.Output
+    Theseus.Effect.Reader
     Theseus.Effect.State
     Theseus.Effect.Writer
+    Theseus.Interpreters
     Theseus.Union
 
   -- other-modules:
@@ -59,13 +59,13 @@ test-suite theseus-test
     Choice
     Coroutine
     Error
-    Reader
-    State
-    Utils
-    Writer
     FileExample
     Interpreting
+    Reader
+    State
     Terminal
+    Utils
+    Writer
 
   -- other-extensions:
   type: exitcode-stdio-1.0

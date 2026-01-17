@@ -15,7 +15,7 @@ data Coroutine a b m c where
   Yield :: a -> Coroutine a b m b
 
 -- | Pauses the computation providing `a` value and waiting on `b`.
-yield :: forall a b ef es. Coroutine a b `Member` es => a -> Eff ef es b
+yield :: forall a b ef es. Coroutine a b :> es => a -> Eff ef es b
 yield a = send $ Yield a
 
 -- | Runs a computation until it either completes or pauses. If it pauses, it

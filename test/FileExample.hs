@@ -54,27 +54,27 @@ data FS :: Effect where
   -- scope.
   WithFile :: ef Identity => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> FS (Eff ef es) a
 
-withFile :: (FS `Member` es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
+withFile :: (FS :> es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
 withFile s action = send $ WithFile s action
 
-runFS :: (EIO `Member` es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
+runFS :: (IOE :> es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
 runFS = interpret \sender (WithFile file action) -> do
   liftIO $ putStrLn $ "Opening file " ++ file
   -- We can use effects that are in scope for the interpreter within the scope
   -- of the sender.
-  pure $ sender @EIO (runFile file action)
+  pure $ sender @IOE (runFile file action)
 
 data File fs :: Effect where
   ReadHandle :: Handle fs -> File fs m String
   WriteHandle :: Handle fs -> String -> File fs m ()
 
-readHandle :: File fs `Member` es => Handle fs -> Eff ef es String
+readHandle :: File fs :> es => Handle fs -> Eff ef es String
 readHandle handle = send $ ReadHandle handle
 
-writeHandle :: File fs `Member` es => Handle fs -> String -> Eff ef es ()
+writeHandle :: File fs :> es => Handle fs -> String -> Eff ef es ()
 writeHandle handle s = send $ WriteHandle handle s
 
-runFile :: (ef Identity, EIO `Member` es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
+runFile :: (ef Identity, IOE :> es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
 -- The `resource` function creates an `Input` effect whose interpretation
 -- ensures that the finalizer is always run.
 runFile name act = with (act $ Handle name) $ using (resource openFile closeFile) $ interpret_ \case

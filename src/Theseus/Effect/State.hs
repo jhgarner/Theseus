@@ -15,19 +15,19 @@ data State s m a where
   Put :: s -> State s m ()
 
 -- | Retrieve the mutable value
-get :: State s `Member` es => Eff ef es s
+get :: State s :> es => Eff ef es s
 get = send Get
 
 -- | A convience function equivalent to `fmap f get`
-gets :: State s `Member` es => (s -> a) -> Eff ef es a
+gets :: State s :> es => (s -> a) -> Eff ef es a
 gets f = fmap f get
 
 -- | Sets the mutable state
-put :: State s `Member` es => s -> Eff ef es ()
+put :: State s :> es => s -> Eff ef es ()
 put s = send $ Put s
 
 -- | Uses a function to change the mutable state
-modify :: State s `Member` es => (s -> s) -> Eff ef es ()
+modify :: State s :> es => (s -> s) -> Eff ef es ()
 modify f = get >>= put . f
 
 type StateResult s = ((,) s)
@@ -55,7 +55,7 @@ evalState s eff = snd <$> runState s eff
 -- | Keeps track of local state changes and only commits them to the outer
 -- state if control flow continues successfully. Something like a `throw` or an
 -- `empty` would not commit the transaction.
-transactionally :: (State s `Member` es, ef (StateResult s)) => Eff ef (State s : es) a -> Eff ef es a
+transactionally :: (State s :> es, ef (StateResult s)) => Eff ef (State s : es) a -> Eff ef es a
 transactionally action = do
   initial <- get
   (newS, a) <- runState initial action

@@ -5,18 +5,18 @@ module Theseus.Effect.IO where
 import Control.Monad.IO.Class
 import Theseus.Eff
 
-data EIO m a where
-  LiftIO :: IO a -> EIO m a
+data IOE m a where
+  LiftIO :: IO a -> IOE m a
 
 -- | Finishes running an IO Eff. Depending on what other effects you've run,
 -- you might need to use `unrestrict` so that the first parameter contains the
 -- right constraint.
-runEffIO :: Eff Anything '[EIO] a -> IO a
+runEffIO :: Eff Anything '[IOE] a -> IO a
 runEffIO =
   runEff . interpretRaw (pure . pure) \(LiftIO ioa) _ continue ->
     pure $ runEffIO =<< getComposeCf (continue $ ComposeCf $ fmap pure ioa)
 
-instance EIO `Member` es => MonadIO (Eff ef es) where
+instance IOE :> es => MonadIO (Eff ef es) where
   liftIO = send . LiftIO
 
 newtype ComposeCf f eff g a = ComposeCf {getComposeCf :: f (g a)}

@@ -16,14 +16,14 @@ import Theseus.Eff
 newtype Throw e m a where
   Throw :: e -> Throw e m a
 
-throw :: Throw e `Member` es => e -> Eff ef es a
+throw :: Throw e :> es => e -> Eff ef es a
 throw e = send $ Throw e
 
 -- | This is a provider for `Throw` effects.
 data Catch m a where
   Catch :: ef (Either e) => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Catch (Eff ef es) a
 
-catch :: (Catch `Member` es, ef (Either e)) => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Eff ef es a
+catch :: (Catch :> es, ef (Either e)) => Eff ef (Throw e : es) a -> (e -> Eff ef es a) -> Eff ef es a
 catch action onThrow = send $ Catch action onThrow
 
 runCatch :: ef Identity => Eff ef (Catch : es) a -> Eff ef es a

@@ -4,7 +4,8 @@
 module Theseus.Union (
   Effect,
   Union (This, That),
-  Member (inj, getProof),
+  (:>) (inj, getProof),
+  (:>>),
   prj,
   IsMember (IsMember, Deeper),
   withProof,
@@ -50,25 +51,25 @@ instance {-# INCOHERENT #-} InternalMember eff es => InternalMember eff (other :
 -- You probably won't use the functions in this class yourself. Instead, you'll
 -- need to carry around this constraint to satisfy functions like `send` and
 -- `interpose`
-class InternalMember eff es => Member eff es where
+class InternalMember eff es => eff :> es where
   inj :: eff m a -> Union es m a
   getProof :: eff `IsMember` es
 
 data IsMember eff es where
-  IsMember :: (forall x. (eff `Member` (eff : es) => x) -> x) -> IsMember eff (eff : es)
+  IsMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
   Deeper :: eff `IsMember` es -> IsMember eff (other : es)
 
-withProof :: IsMember eff es -> (eff `Member` es => x) -> x
+withProof :: IsMember eff es -> (eff :> es => x) -> x
 withProof (IsMember f) x = f x
 withProof (Deeper more) x = withProof more x
 
 prj :: InternalMember eff ls => Union ls m a -> Maybe (eff m a)
 prj = internalPrj
 
-instance InternalMember eff es => Member eff es where
+instance InternalMember eff es => eff :> es where
   inj = internalInj
   getProof = internalGetProof
 
-type family Members (effs :: [Effect]) (es :: [Effect]) :: Constraint where
-  Members '[] _ = ()
-  Members (a : as) es = (a `Member` es, Members as es)
+type family (:>>) (effs :: [Effect]) (es :: [Effect]) :: Constraint where
+  '[] :>> _ = ()
+  (a : as) :>> es = (a :> es, as :>> es)

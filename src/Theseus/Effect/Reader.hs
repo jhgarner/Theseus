@@ -32,15 +32,15 @@ data Reader r m a where
   Local :: ef Identity => (r -> r) -> Eff ef (Reader r : es) a -> Reader r (Eff ef es) a
 
 -- | Returns the `Reader`'s constant value.
-ask :: Reader r `Member` es => Eff ef es r
+ask :: Reader r :> es => Eff ef es r
 ask = send Ask
 
 -- | Modifies the `Reader`'s value within some limited scope.
-local :: ef Identity => Reader r `Member` es => (r -> r) -> Eff ef (Reader r : es) a -> Eff ef es a
+local :: ef Identity => Reader r :> es => (r -> r) -> Eff ef (Reader r : es) a -> Eff ef es a
 local f action = send $ Local f action
 
 -- | A convenience function equivalent to `fmap f ask`.
-asks :: Reader r `Member` es => (r -> a) -> Eff ef es a
+asks :: Reader r :> es => (r -> a) -> Eff ef es a
 asks f = fmap f ask
 
 -- | Runs a `Reader r` effect with the generally expected semantics.
@@ -52,7 +52,7 @@ runReader r = interpret \sender -> \case
   Local f m -> pure $ sender @(Reader r) $ localReader f m
 
 -- | A `runReader` that modifies the result of an inner `Reader r`.
-localReader :: forall r ef es a. (ef Identity, Reader r `Member` es) => (r -> r) -> Eff ef (Reader r : es) a -> Eff ef es a
+localReader :: forall r ef es a. (ef Identity, Reader r :> es) => (r -> r) -> Eff ef (Reader r : es) a -> Eff ef es a
 localReader f = interpret \sender -> \case
   Ask -> pure . f <$> ask
   Local newF m -> pure $ sender @(Reader r) $ localReader (newF . f) m
@@ -65,7 +65,7 @@ runReaderNoLocal @_ @r r = interpret \sender -> \case
   Ask -> pure $ pure r
   Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)
 
-locallyRunReaderNoLocal :: (Reader r `Member` es, ef Identity) => Eff ef (Reader r : es) a -> Eff ef es a
+locallyRunReaderNoLocal :: (Reader r :> es, ef Identity) => Eff ef (Reader r : es) a -> Eff ef es a
 locallyRunReaderNoLocal @r = interpret \sender -> \case
   Ask -> pure <$> ask
   Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)

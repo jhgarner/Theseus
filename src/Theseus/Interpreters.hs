@@ -27,7 +27,7 @@ import Theseus.Union
 -- for that. Instead you need to apply the sender function to whatever needs
 -- the constraint. You can think of a `Sender` as removing constraints from
 -- values.
-type Sender es esSend = (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
+type Sender es esSend = (forall e. e :> es => (forall y. (e :> esSend => y) -> y))
 
 -- | An interpreter for first order effects that use simple control flow and do
 -- not change the return type. Almost all effects will use this.
@@ -188,7 +188,7 @@ type HandlerRaw eff ef es cf wrap =
 -- other words, it turns a `->` into a `=>`. Of course we can't actually
 -- express that in Haskell directly so there's a little extra going on. This is
 -- related to the `Sender` and looks vaguely like a quantified constraint.
-liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e `Member` es => (forall y. (e `Member` esSend => y) -> y))
+liftIt :: (forall e. e `IsMember` es -> e `IsMember` esSend) -> (forall e. e :> es => (forall y. (e :> esSend => y) -> y))
 liftIt f = withProof (f getProof)
 
 -- | Allows us to weaken the constraint on Eff. For example, you can turn
@@ -212,7 +212,7 @@ instance ControlFlow IdentityCf Anything where
 
 -- | Replaces one interpretation with another.
 interposeRaw ::
-  (eff `Member` es, ef wrap, ControlFlow cf someEf) =>
+  (eff :> es, ef wrap, ControlFlow cf someEf) =>
   ef `Implies` someEf ->
   (forall x. x -> wrap x) ->
   IHandlerRaw eff ef es cf wrap ->
@@ -228,7 +228,7 @@ interposeRaw topImply ret f (Eff act) = case act of
 -- | A handler for an interposition.
 type IHandlerRaw eff ef es cf wrap =
   ( forall esSend efSend x a.
-    eff `Member` es =>
+    eff :> es =>
     eff (Eff efSend esSend) x ->
     Sender es esSend ->
     (cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->

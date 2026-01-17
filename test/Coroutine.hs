@@ -102,25 +102,25 @@ testCoroutine = do
 data Simple :: Effect where
   Act :: Simple m String
 
-act :: Simple `Member` es => Eff ef es String
+act :: Simple :> es => Eff ef es String
 act = send Act
 
 runSimple :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es a
 runSimple s = interpret \_ Act -> pure $ pure s
 
 data SimpleH :: Effect where
-  ActH :: Simple `Member` es => Eff ef es String -> SimpleH (Eff ef es) String
+  ActH :: Simple :> es => Eff ef es String -> SimpleH (Eff ef es) String
 
 runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
 runSimpleH s = interpret \_ (ActH action) -> pure $ fmap (++ s) action
 
-runSimpleHWrapping :: Simple `Member` es => ef SHW => (forall ef es. Simple `Member` es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
+runSimpleHWrapping :: Simple :> es => ef SHW => (forall ef es. Simple :> es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
 runSimpleHWrapping s = interpretW (pure . SHW "" "") (elabSimpleHWrapping s)
 
 data SHW a = SHW String String a
   deriving (Functor, Foldable, Traversable, Eq, Show)
 
-elabSimpleHWrapping :: ef SHW => Simple `Member` es => (forall ef es. Simple `Member` es => Eff ef es String) -> HandlerW SimpleH ef es SHW
+elabSimpleHWrapping :: ef SHW => Simple :> es => (forall ef es. Simple :> es => Eff ef es String) -> HandlerW SimpleH ef es SHW
 elabSimpleHWrapping s _ (ActH action) = do
   fo <- s
   pure
@@ -135,5 +135,5 @@ elabSimpleHWrapping s _ (ActH action) = do
         pure $ SHW (fo ++ fr) (sr ++ so) result
     )
 
-actH :: (SimpleH `Member` es, Simple `Member` es) => Eff ef es String -> Eff ef es String
+actH :: (SimpleH :> es, Simple :> es) => Eff ef es String -> Eff ef es String
 actH action = send $ ActH action

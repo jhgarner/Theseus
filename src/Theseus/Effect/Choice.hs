@@ -104,7 +104,7 @@ runChoice = interpretRaw (pure . pure) \cases
 -- | Same as `runChoice`, but modifies a `Choice` that's not at the top of the
 -- stack.
 poseChoice ::
-  Choice `Member` es =>
+  Choice :> es =>
   [] `IsoSome` ef ->
   ef `Implies` Traversable ->
   Eff ef es a ->
@@ -119,14 +119,14 @@ poseChoice (IsoSome (Iso lg gl)) imply =
         many -> lg <$> runMany many
 
 -- | Executes all the threads
-runMany :: Choice `Member` es => Many Choice (Eff ef es) a -> Eff ef es [a]
+runMany :: Choice :> es => Many Choice (Eff ef es) a -> Eff ef es [a]
 runMany (Many isoSomeId travProof start go) =
   join <$> poseChoice isoSomeId travProof do
     inits <- start
     results <- traverse (poseChoice isoSomeId travProof . go) inits
     pure $ join results
 
-instance (Choice `Member` es, ef [], ef `IsAtLeast` Traversable) => Alternative (Eff ef es) where
+instance (Choice :> es, ef [], ef `IsAtLeast` Traversable) => Alternative (Eff ef es) where
   empty = send Empty
   a <|> b =
     send Choose >>= \case
@@ -138,7 +138,7 @@ data Collect :: Effect where
   Collect :: (ef `IsAtLeast` Traversable, ef []) => Eff ef (Choice : es) a -> Collect (Eff ef es) [a]
 
 -- | Gathers all the threads of computation into a list.
-collect :: (Collect `Member` es, ef []) => ef `IsAtLeast` Traversable => Eff ef (Choice : es) a -> Eff ef es [a]
+collect :: (Collect :> es, ef []) => ef `IsAtLeast` Traversable => Eff ef (Choice : es) a -> Eff ef es [a]
 collect action = send $ Collect action
 
 -- | Provides the default `Choice` implementation.

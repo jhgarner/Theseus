@@ -270,7 +270,7 @@ data Freer :: Out -> [Effect] -> Type -> Type where
       -- that we get some ambiguous types. Luckily it's not hard to fix those;
       -- it just requires some explicit types when you call `unrestrict`.
       ef `Implies` r ->
-      -- Once again we pass around an explicit proof of `Member`ship. Since the
+      -- Once again we pass around an explicit proof of membership. Since the
       -- effect we're interpreting is in scope when the interpreter runs, we
       -- can also assume it is in scope when the effect is sent. This isn't
       -- normally included in `freer` types, but it's practically useful.
@@ -339,7 +339,7 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   -- control flows do not care about the result. The next most common is
   -- `Traversable` so that you can partially inspect whatever is stored within.
   cfRun ::
-    (eff `Member` es, ef wrap) =>
+    (eff :> es, ef wrap) =>
     ef `Implies` r ->
     -- | This function must be used linearly. Failing to call it causes
     -- finalizers to not be run. Calling it more than once causes local
@@ -354,7 +354,7 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
 -- This section contains functions that construct and manipulate `freer` values
 -- without interpreting them. The interpreters are in a separate module.
 
--- | This adds a single effect to the computation. You can use the `Member`
+-- | This adds a single effect to the computation. You can use the `:>`
 -- class to convert an effect into a Union, then using `lift` to convert it
 -- into a Freer. The `send` function does all this for you so you probably
 -- don't need to call lift manually.
@@ -362,12 +362,12 @@ lift :: Union es (Eff ef es) a -> Freer ef es a
 lift f = Impure f id \_ _ x -> x
 
 -- | Perform an effect as long as it will be handled somewhere up the stack.
-send :: eff `Member` es => eff (Eff ef es) a -> Eff ef es a
+send :: eff :> es => eff (Eff ef es) a -> Eff ef es a
 send eff = Eff $ lift $ inj eff
 
 -- | Adds an extra unused effect onto the top of an effectful computation. This
 -- is helpful when you want to hide certain effects from pieces of code. For
--- example, if you specialize it to ``raise :: X `Member` es => Eff ef (X : es)
+-- example, if you specialize it to ``raise :: X :> es => Eff ef (X : es)
 -- -> Eff ef es a``, then any uses of `X` in the input will use the inner
 -- interpreter for `X` instead of the outermost one. Any uses of `X` after the
 -- `raise` will use the outermost one.
@@ -381,12 +381,12 @@ raise (Eff act) = Eff case act of
         -- Why is this impossible? When we raise a value, we know for certain
         -- that it's unused by the computation that's getting raised. That
         -- means any effects must be referencing something deeper. I think the
-        -- problem comes from `Member` being an overlapping class. Imagine we
+        -- problem comes from `:>` being an overlapping class. Imagine we
         -- tried to raise an effect that was already on the stack. All of the
-        -- `Member` proofs would use the recursive case to refer down to the
+        -- `:>` proofs would use the recursive case to refer down to the
         -- original effect skipping over the newly added one thanks to the
         -- incoherent instance. Although we know that's what will happen, the
-        -- compiler fears that it'll see a `Member` that doesn't skip the
+        -- compiler fears that it'll see a `:>` that doesn't skip the
         -- outermost effect. It can't reason between the function that
         -- generates the constraints and the function that uses them. This is
         -- where `IsMember` comes in. It turns the constraint into a datatype.
