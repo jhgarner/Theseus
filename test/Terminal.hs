@@ -66,7 +66,7 @@ data Terminal :: Effect where
 -- or anything else. One block of code can be interpreted in any number of
 -- ways.
 
--- A few things are introduced in this line. `Eff` is the Monad that our effect
+-- A few things are introduced here. `Eff` is the Monad that our effect
 -- system runs in. The `ef` parameter we'll ignore for now. The `es` parameter
 -- is a type level list of effects. The `es` parameter will change as the
 -- program runs and effects are handled and introduced. Within one "level" of

@@ -4,17 +4,22 @@
 <head>
   <title><%= title %></title>
   <meta http-equiv="content-type" content="text/html; charset=UTF-8">
-  <meta name="viewport" content="width=1200, user-scalable=yes, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" media="all" href="<%= css %>" />
 </head>
 <body>
   <div id="container">
     <div id="background"></div>
+    <div id="layout_toggles">
+      <span class="label">Code:</span>
+      <a href="javascript:setLayout('side')" id="toggle_side" class="active">Right</a>
+      <a href="javascript:setLayout('top')" id="toggle_top">Below</a>
+      <a href="javascript:setLayout('bottom')" id="toggle_bottom">Above</a>
+    </div>
     <% if (sources.length > 1) { %>
       <ul id="jump_to">
         <li>
-          <a class="large" href="javascript:void(0);">Jump To &hellip;</a>
-          <a class="small" href="javascript:void(0);">+</a>
+          <a href="javascript:void(0);" onclick="toggleJumpTo(event)">Jump To &hellip;</a>
           <div id="jump_wrapper">
           <div id="jump_page">
             <% for (var i=0, l=sources.length; i<l; i++) { %>
@@ -52,5 +57,46 @@
         <% } %>
     </ul>
   </div>
+  <script>
+    function setLayout(layout) {
+      document.body.className = 'layout-' + layout;
+      localStorage.setItem('docPageLayout', layout);
+      
+      document.getElementById('toggle_side').className = layout === 'side' ? 'active' : '';
+      document.getElementById('toggle_top').className = layout === 'top' ? 'active' : '';
+      document.getElementById('toggle_bottom').className = layout === 'bottom' ? 'active' : '';
+      
+      var viewport = document.querySelector('meta[name="viewport"]');
+      if (layout === 'side') {
+        viewport.setAttribute('content', 'width=1200, user-scalable=yes');
+      } else {
+        viewport.setAttribute('content', 'width=device-width, initial-scale=1.0');
+      }
+    }
+
+    function toggleJumpTo(e) {
+      e.stopPropagation();
+      var jumpTo = document.getElementById('jump_to');
+      if (jumpTo) jumpTo.classList.toggle('active');
+    }
+
+    window.addEventListener('click', function(e) {
+      var jumpTo = document.getElementById('jump_to');
+      if (jumpTo && !jumpTo.contains(e.target)) {
+        jumpTo.classList.remove('active');
+      }
+    });
+    
+    // Initialize
+    var savedLayout = localStorage.getItem('docPageLayout');
+    if (!savedLayout) {
+      if (window.innerWidth < 600 || window.screen.width < 600) {
+        savedLayout = 'bottom';
+      } else {
+        savedLayout = 'side';
+      }
+    }
+    setLayout(savedLayout);
+  </script>
 </body>
 </html>

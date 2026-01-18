@@ -1,15 +1,12 @@
 # Theseus
 
-> This library is still in progress and not ready to be shared widely. If you've
-> stumbled upon this now, take a look but know that it's still a bit of a mess.
-
 Welcome to the hub for Theseus, an effect system library for Haskell. Theseus is
-an effect system that supports the full suite of algebraic effects (including
-Coroutine) and many higher order effects. It accomplishes this while also
-ensuring that semantics do not change when effects are reordered.
+an effect system that supports algebraic effects (including Coroutine), many
+higher order effects, and is designed so that semantics do not change when
+effects are reordered.
 
 We'll explore how, much like the Ship of Theseus, programs can be deconstructed
-and rebuilt in many ways without changing their underlying identity.
+and rebuilt without changing what they are.
 
 ## Guides
 
@@ -23,27 +20,27 @@ For getting started, there are a couple good places:
   to speed with a couple of examples. If you're only new to Theseus, it'll cover
   some of what makes Theseus unique.
 * [The File example](https://jhgarner.github.io/Theseus/test/FileExample.html)
-  showcases Theseus' main feature. If you're experience with effect systems and
+  showcases Theseus' main feature. If you're experienced with effect systems and
   want to know what makes Theseus special, look there.
 
-The builtin effects are useful to walk through as well since they the range of
-Theseus' complexity.
+The builtin effects are useful to walk through as well since they cover the
+range of Theseus' complexity.
 
 * [The Reader implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Reader.html) covers a simple higher order effect.
 * [The State implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/State.html) covers a simple first order effect that changes the
   return type.
 * [The Writer implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Writer.html) is a higher order effect that also changes the
-  return type.
+  return type and depends on a finalizer.
 * [The Error implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Error.html) introduces Theseus' control flow manipulation
   features.
 * [The Coroutine effect](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Coroutine.html) gives another example of unique control flow.
 * [The Choice implementation](https://jhgarner.github.io/Theseus/src/Theseus/Effect/Choice.html) shows the most complicated control flow.
 
-Finally there's the inner workings. These might be helpful while you're looking
-into the more complicated effects.
+Finally there are the inner workings. These might be helpful while you're
+looking into the more complicated effects.
 
 * [The Eff definition](https://jhgarner.github.io/Theseus/src/Theseus/EffType.html) explains how it's all defined.
-* [The interpreters](https://jhgarner.github.io/Theseus/src/Theseus/Interpreters.html) explain how it can be used.
+* [The interpreters](https://jhgarner.github.io/Theseus/src/Theseus/Interpreters.html) show how consuming works.
 
 ## Shoutouts
 
@@ -62,3 +59,8 @@ space. A non-exhaustive list of ones I'm familiar with are:
 * Heftia's approach supports the full gamut of algebraic and higher order
   effects. In exchange for all that support, it limits when richer algebraic
   effects can run.
+
+Theseus, compared to those, is most similar to the free/freer effect systems. It
+changes some of the algebraic effect semantics (the biggest being that Choice is
+more breadth first than depth first), but in exchange has higher order effects
+and algebraic effects that play well with each other.

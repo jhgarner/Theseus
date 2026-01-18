@@ -16,7 +16,7 @@ body {
   margin: 0; 
   padding: 0;
   height: 100%;
-  background-color: #F5F5FF;
+  background-color: #f8f8ff;
 }
 
 #container { 
@@ -77,6 +77,11 @@ pre, tt, code {
   font-family: Menlo, Monaco, Consolas, "Lucida Console", monospace;
   margin: 0; 
   padding: 0;
+  overflow-x: auto;
+}
+
+pre {
+  background: #f8f8ff;
 }
 
 .annotation pre {
@@ -88,6 +93,8 @@ pre, tt, code {
   -webkit-box-shadow: inset 0 0 10px rgba(0,0,0,0.1);
   box-shadow:         inset 0 0 10px rgba(0,0,0,0.1);
   overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .annotation pre code {
@@ -120,7 +127,7 @@ blockquote {
 
 ul.sections {
   list-style: none;
-  padding: 0 0 5px 0;
+  padding: 30px 0 5px 0;
   margin: 0;
 }
 
@@ -133,61 +140,59 @@ ul.sections > li > div {
 }
 
 /*---------------------- Jump Page -----------------------------*/
-#jump_to, #jump_page {
+#jump_to {
   margin: 0;
+  padding: 5px;
   background: white;
-  -webkit-box-shadow: 0 0 25px #777; 
-  -moz-box-shadow: 0 0 25px #777;
-  -webkit-border-bottom-left-radius: 5px; 
-  -moz-border-radius-bottomleft: 5px;
+  box-shadow: 0 0 5px rgba(0,0,0,0.2);
+  border-radius: 0 0 5px 5px;
   font: 10px Arial;
   text-transform: uppercase;
   cursor: pointer;
   text-align: right;
   list-style: none;
-}
-
-#jump_to a {
-  text-decoration: none;
-}
-
-#jump_to a.large {
-  display: inline-block;
-}
-
-#jump_to a.small {
-  display: none;
-}
-
-#jump_to, #jump_wrapper {
   position: fixed;
   right: 0; 
   top: 0;
+  z-index: 101;
+}
+
+#jump_to > li > a {
+  text-decoration: none;
   padding: 5px 10px;
-  margin: 0;
+  color: #30404f;
+  display: inline-block;
+}
+
+#jump_to.active > li > a {
+  background: #30404f;
+  color: #fff;
+  border-radius: 3px;
+}
+
+#jump_to:not(.active) > li > a:hover {
+  background: #f5f5ff;
+  color: #30404f;
+  border-radius: 3px;
 }
 
 #jump_wrapper {
   display: none;
   padding: 0;
-}
-
-#jump_to:hover #jump_wrapper {
-  display: block;
-}
-
-#jump_page_wrapper {
-  position: fixed;
+  position: absolute;
+  top: 100%;
   right: 0;
-  top: 0;
-  bottom: 0;
+  background: white;
+  box-shadow: 0 0 5px rgba(0,0,0,0.2);
+  border-radius: 5px 0 5px 5px;
 }
 
 #jump_page {
-  padding: 5px 0 3px;
-  margin: 0 0 25px 25px;
-  max-height: 100%;
+  margin: 0;
+  padding: 5px 0;
+  max-height: 100vh;
   overflow: auto;
+  list-style: none;
 }
 
 #jump_page .source {
@@ -195,10 +200,20 @@ ul.sections > li > div {
   padding: 5px 10px;
   text-decoration: none;
   border-top: 1px solid #eee;
+  color: #30404f;
+  white-space: nowrap;
+}
+
+#jump_page .source:first-child {
+  border-top: none;
 }
 
 #jump_page .source:hover {
   background: #f5f5ff;
+}
+
+#jump_to.active #jump_wrapper {
+  display: block;
 }
 
 /*---------------------- Main Layout -----------------------------*/
@@ -239,6 +254,7 @@ ul.sections > li > div.content {
   border: none;
   -webkit-box-shadow: none;
   box-shadow: none;
+  width: 58%;
 }
 
 .sswrap {
@@ -279,7 +295,6 @@ pre code {
   display: block; 
   padding: 0.5em;
   color: #000;
-  background: #f8f8ff
 }
 
 pre .hljs-comment,
@@ -401,3 +416,129 @@ pre .hljs-chunk {
 pre .hljs-tex .hljs-formula {
   opacity: 0.5;
 }
+
+/*---------------------- Layout Toggles -----------------------------*/
+#layout_toggles {
+  position: fixed;
+  top: 0;
+  right: 100px; /* Left of Jump To */
+  z-index: 100;
+  background: white;
+  padding: 5px;
+  border-radius: 0 0 5px 5px;
+  box-shadow: 0 0 5px rgba(0,0,0,0.2);
+  font: 10px Arial;
+  text-transform: uppercase;
+}
+
+#layout_toggles a {
+  text-decoration: none;
+  padding: 5px 10px;
+  color: #30404f;
+  margin: 0 2px;
+}
+
+#layout_toggles .label {
+  padding: 0 5px 0 2px;
+  color: #777;
+}
+
+#layout_toggles a.active {
+  background: #30404f;
+  color: #fff;
+  border-radius: 3px;
+}
+
+#layout_toggles a:not(.active):hover {
+  background: #f5f5ff;
+  color: #30404f;
+}
+
+/*---------------------- Stacked Layouts -----------------------------*/
+
+body.layout-top #background,
+body.layout-bottom #background {
+  display: none;
+}
+
+body.layout-top ul.sections > li,
+body.layout-bottom ul.sections > li {
+  white-space: normal;
+  display: flex;
+}
+
+body.layout-top ul.sections > li {
+  flex-direction: column;
+}
+
+body.layout-bottom ul.sections > li {
+  flex-direction: column-reverse;
+}
+
+body.layout-top ul.sections > li > div.annotation,
+body.layout-bottom ul.sections > li > div.annotation {
+  display: block;
+  max-width: 900px;
+  min-width: 0;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 25px 10px 25px;
+  background: #fff;
+}
+
+body.layout-top ul.sections > li > div.content,
+body.layout-bottom ul.sections > li > div.content {
+  display: block;
+  width: 100%;
+  padding: 10px 25px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* Optional: Make the code blocks look distinct in stacked mode */
+body.layout-top pre, 
+body.layout-bottom pre {
+  border: 1px solid #e5e5ee;
+  border-radius: 3px;
+  padding: 10px 15px;
+}
+
+body.layout-top,
+body.layout-bottom {
+  background-color: #fff;
+}
+
+@media only screen and (max-width: 600px) {
+  #layout_toggles {
+    right: auto;
+    left: 0;
+    border-radius: 0 0 5px 0;
+    font-size: 9px;
+  }
+  
+  #layout_toggles a {
+    padding: 5px 5px;
+  }
+  
+  body.layout-top ul.sections > li > div.annotation,
+  body.layout-bottom ul.sections > li > div.annotation {
+    padding: 10px 15px 5px 15px;
+  }
+  
+  body.layout-top ul.sections > li > div.content,
+  body.layout-bottom ul.sections > li > div.content {
+    padding: 5px 15px;
+  }
+}
+
+/* Allow page scrolling for code in side layout */
+ul.sections > li > div.content pre {
+  overflow-x: visible;
+}
+
+/* Keep internal scrolling for code in stacked layouts */
+body.layout-top ul.sections > li > div.content pre,
+body.layout-bottom ul.sections > li > div.content pre {
+  overflow-x: auto;
+}
+
