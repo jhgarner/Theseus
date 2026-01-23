@@ -1,3 +1,4 @@
+{-# LANGUAGE ImpredicativeTypes #-}
 {-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 module Coroutine where
@@ -102,38 +103,38 @@ testCoroutine = do
 data Simple :: Effect where
   Act :: Simple m String
 
-act :: Simple :> es => Eff ef es String
+act :: Simple :> es => Eff lb ub es String
 act = send Act
 
-runSimple :: ef Identity => String -> Eff ef (Simple : es) a -> Eff ef es a
+runSimple :: lb Identity => String -> Eff lb ub (Simple : es) a -> Eff lb ub es a
 runSimple s = interpret \_ Act -> pure $ pure s
 
 data SimpleH :: Effect where
-  ActH :: Simple :> es => Eff ef es String -> SimpleH (Eff ef es) String
+  ActH :: Simple :> es => Eff lb ub es String -> SimpleH (Eff lb ub es) String
 
-runSimpleH :: ef Identity => String -> Eff ef (SimpleH : es) a -> Eff ef es a
+runSimpleH :: lb Identity => String -> Eff lb ub (SimpleH : es) a -> Eff lb ub es a
 runSimpleH s = interpret \_ (ActH action) -> pure $ fmap (++ s) action
 
-runSimpleHWrapping :: Simple :> es => ef SHW => (forall ef es. Simple :> es => Eff ef es String) -> Eff ef (SimpleH : es) a -> Eff ef es (SHW a)
+runSimpleHWrapping :: Simple :> es => lb SHW => (forall lb ub es. Simple :> es => Eff lb ub es String) -> Eff lb ub (SimpleH : es) a -> Eff lb ub es (SHW a)
 runSimpleHWrapping s = interpretW (pure . SHW "" "") (elabSimpleHWrapping s)
 
 data SHW a = SHW String String a
   deriving (Functor, Foldable, Traversable, Eq, Show)
 
-elabSimpleHWrapping :: ef SHW => Simple :> es => (forall ef es. Simple :> es => Eff ef es String) -> HandlerW SimpleH ef es SHW
-elabSimpleHWrapping s _ (ActH action) = do
-  fo <- s
-  pure
-    ( do
+elabSimpleHWrapping :: lb SHW => Simple :> es => (forall lb ub es. Simple :> es => Eff lb ub es String) -> HandlerW SimpleH lb ub es SHW
+elabSimpleHWrapping s _ (ActH action) =
+  ( pure
+      do
         fi <- s
         result <- action
         si <- s
         pure $ fi ++ result ++ si
-    , \act -> do
-        SHW fr sr result <- runSimpleHWrapping s act
-        so <- s
-        pure $ SHW (fo ++ fr) (sr ++ so) result
-    )
+  , \act -> do
+      fo <- s
+      SHW fr sr result <- runSimpleHWrapping s act
+      so <- s
+      pure $ SHW (fo ++ fr) (sr ++ so) result
+  )
 
-actH :: (SimpleH :> es, Simple :> es) => Eff ef es String -> Eff ef es String
+actH :: (SimpleH :> es, Simple :> es) => Eff lb ub es String -> Eff lb ub es String
 actH action = send $ ActH action

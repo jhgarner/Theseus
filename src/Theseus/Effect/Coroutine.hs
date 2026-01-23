@@ -15,19 +15,19 @@ data Coroutine a b m c where
   Yield :: a -> Coroutine a b m b
 
 -- | Pauses the computation providing `a` value and waiting on `b`.
-yield :: forall a b ef es. Coroutine a b :> es => a -> Eff ef es b
+yield :: forall a b lb ub es. Coroutine a b :> es => a -> Eff lb ub es b
 yield a = send $ Yield a
 
 -- | Runs a computation until it either completes or pauses. If it pauses, it
 -- can be resumed.
-runCoroutine :: forall a b c ef es. ef (Status ef es a b) => Eff ef (Coroutine a b : es) c -> Eff ef es (Status ef es a b c)
-runCoroutine = interpretRaw (pure . Done) \(Yield a) _ next ->
-  case next $ Yielding pure of
+runCoroutine :: forall a b c lb ub es. lb (Status lb ub es a b) => Eff lb ub (Coroutine a b : es) c -> Eff lb ub es (Status lb ub es a b c)
+runCoroutine = interpretRaw isoSomeId (pure . Done) \(Yield a) _ _ _ next ->
+  case next implying (Just $ getProof @(Coroutine a b)) $ Yielding pure of
     Yielding yielding -> pure $ Yielded a yielding
 
 -- | It is essential that the function provided by `Yielded` be used exactly
 -- once. Otherwise you'll get confusing semantics within your code.
-data Status ef es a b c = Done c | Yielded a (b -> Eff ef (Coroutine a b : es) c)
+data Status lb ub es a b c = Done c | Yielded a (b -> Eff lb ub (Coroutine a b : es) c)
   deriving (Functor)
 
 newtype Yielding b eff m c = Yielding {yielded :: b -> m c}
@@ -36,5 +36,15 @@ newtype Yielding b eff m c = Yielding {yielded :: b -> m c}
 instance ControlFlow (Yielding b) Anything where
   Yielding bmc `cfApply` fa = Yielding \b -> bmc b <*> fa
   Yielding bmc `cfBind` afb = Yielding $ bmc >=> afb
+  cfOnce ogLb member handler (Yielding @_ @eff go) = Yielding \b -> do
+    matchOn (go b) >>= \case
+      Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
+      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+        cfOnce ogLb member handler $ next imply member x
+  cfPutMeIn _ f (Yielding go) = Yielding \b -> do
+    matchOn (go b) >>= \case
+      Pure a -> f a
+      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+        cfPutMeIn member f $ next imply member x
   cfMap _ _ handler (Yielding bmc) = Yielding $ handler . bmc
   cfRun _ handler (Yielding bmc) = Yielding $ handler . bmc

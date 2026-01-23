@@ -24,6 +24,12 @@ class Anything (f :: Type -> Type)
 
 instance Anything f
 
+-- | A class that no types implement. It acts as a useful upper bound because
+-- it implies all other classes.
+class Nonthing (f :: Type -> Type) where
+  produceIt :: a -> f b
+  consumeIt :: f a -> b
+
 -- | Proof that two types are the equivalent. If you construct an instance of
 -- this type, please make sure the isomorphism holds. For example, `Iso (const
 -- Nothing) (const Nothing)` would be a bad `Iso`. It's better to use the
@@ -99,6 +105,9 @@ class stronger `IsAtLeast` weaker where
 
 instance lhs `IsAtLeast` Anything where
   implyAtLeast = implying
+
+instance Nonthing `IsAtLeast` Traversable where
+  implyAtLeast = Implies \f -> f @[] $ Iso consumeIt produceIt
 
 -- Assuming no one's doing anything bad with `Implies`, this instance should be
 -- equivalent to any others that apply, so we can make it incoherent.

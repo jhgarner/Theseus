@@ -16,17 +16,17 @@ instance {-# INCOHERENT #-} (a ~ b, Eq a, Show a) => Expects a b where
 instance (Eq a, Show a) => Expects a (IO a) where
   lhs === rhs = (`shouldReturn` lhs) . rhs
 
-doneCoroutine :: ef (Status ef es a b) => Eff ef (Coroutine a b : es) c -> Eff ef es c
+doneCoroutine :: lb (Status lb ub es a b) => Eff lb ub (Coroutine a b : es) c -> Eff lb ub es c
 doneCoroutine action =
   runCoroutine action <&> \case
     Done c -> c
     Yielded _ _ -> error "Coroutine wasn't done"
 
-yieldCoroutine :: ef (Status ef es () ()) => Eff ef (Coroutine () () : es) c -> Eff ef es (Eff ef (Coroutine () () : es) c)
+yieldCoroutine :: lb (Status lb ub es () ()) => Eff lb ub (Coroutine () () : es) c -> Eff lb ub es (Eff lb ub (Coroutine () () : es) c)
 yieldCoroutine action =
   runCoroutine action <&> \case
     Yielded () rest -> rest ()
     Done _ -> error "Coroutine was already done"
 
-unitYield :: Coroutine () () :> es => Eff ef es ()
+unitYield :: Coroutine () () :> es => Eff lb ub es ()
 unitYield = yield @() @() ()

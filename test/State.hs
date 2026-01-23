@@ -40,7 +40,7 @@ testState = do
                 throw s
             \s -> pure $ "caught " ++ s
       it "rolls back on empty alternative" do
-        ("s", [] @String) === runEff $ unrestrict @Traversable $ runState "s" $ runCollect $ collect do
+        ("s", [] @String) === runEff $ unrestrict @Traversable @Traversable implying $ runState "s" $ runCollect $ collect do
           transactionally @String do
             put "newS"
             empty

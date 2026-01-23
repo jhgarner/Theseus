@@ -4,6 +4,7 @@
 
 module Theseus.EffType where
 
+import Control.Monad.Reader (ReaderT (ReaderT))
 import Data.Kind (Constraint, Type)
 import Theseus.Constraints
 import Theseus.Union
@@ -207,30 +208,46 @@ import Theseus.Union
 -- haven't come up yet though.
 type Out = (Type -> Type) -> Constraint
 
--- | An effectful computation. The second type variable stores a list of
+-- | An effectful computation. The third type variable stores a list of
 -- effects that are valid within the computation. This is common across many
--- effect systems. The first type variable constrains how effects manipulate
--- the return value. This is unique to Theseus. This type is a newtype wrapper
--- around the Freer type. This was more important in earlier versions of
--- Theseus, but not any more. I'm keeping it around though because having one
--- layer of indirection between the public type everyone uses and the monad
--- that implements it seems nice. When you see `Eff` in a type, treat it as
--- `Freer`.
-newtype Eff (ef :: Out) (es :: [Effect]) a
-  = Eff {unEff :: Freer ef es a}
-  deriving (Functor, Applicative, Monad)
+-- effect systems. The first two type variables constrain how effects manipulate
+-- the return value. Those are unique to Theseus. You can mostly think of `Eff`
+-- and `Freer` as interchangable. `Eff` though requires a `Facts` parameter.
+-- Why? Interpreters want to rely on the fact that the upper bound implies the
+-- lower bound. Since `lb` and `ub` are usually type variables, every single
+-- function working with `Eff` would need to add or pass around proof that `ub`
+-- implies `lb`. To get rid of that noise, we use a `Reader` pattern. You can
+-- construct a nonsense type like `Eff Show Read ...`, but you can't run it.
+--
+-- I might try adding other useful pieces of information to the `Facts` object.
+-- For example, I could require that `Identity` be valid for all `lb`s.
+newtype Eff (lb :: Out) (ub :: Out) (es :: [Effect]) a
+  = Eff {unEff :: Facts lb ub -> Freer lb ub es a}
+  deriving (Functor)
+  deriving (Applicative, Monad) via ReaderT (Facts lb ub) (Freer lb ub es)
+
+newtype Facts lb ub = Facts {bounded :: ub `Implies` lb}
+
+getFacts :: Eff lb ub es (Facts lb ub)
+getFacts = Eff \facts -> pure facts
+
+matchOn :: Eff lb ub es a -> Eff lb ub es (Freer lb ub es a)
+matchOn (Eff act) = Eff \facts -> pure $ act facts
+
+effUn :: Facts lb ub -> Eff lb ub es a -> Freer lb ub es a
+effUn = flip unEff
 
 -- | A higher order Freer Monad that keeps track of some extra stuff. The type
 -- parameters match `Eff`. Usually, a `Freer` type would have just two type
 -- parameters and look like `Freer f a` where `f` is some kind of open sum
 -- type. Instead I hardcode this to use an open union because that simplified
 -- some of the other bits.
-data Freer :: Out -> [Effect] -> Type -> Type where
+data Freer :: Out -> Out -> [Effect] -> Type -> Type where
   -- | Pure simply holds a value. You can think of this effect system as
   -- transforming `Impures` over and over again until all that's left is a pure
   -- value. Once a Freer is a pure value, it will no longer be run. This
   -- fact allows finalizers to exist.
-  Pure :: a -> Freer ef es a
+  Pure :: a -> Freer lb ub es a
   Impure ::
     -- This is the `f` variable from the intro, but I've hardcoded `f` to
     -- a `Union`. I tried making it generic, but it was kind of unwieldy. The
@@ -241,7 +258,9 @@ data Freer :: Out -> [Effect] -> Type -> Type where
     -- value that our computation needs to continue running is of type `x`.
     -- When an effect is first sent, the *send variables will be the same as
     -- the other variables. That will change as effects are interpreted.
-    Union es (Eff efSend esSend) x ->
+    Union es (Eff lbSend ubSend esSend) x ->
+    lbSend `Implies` lb ->
+    ub `Implies` ubSend ->
     -- This parameter was not in the introduction above. It is a proof that any
     -- effects that are in scope when the state is being interpreted are in
     -- scope when the effect is being sent. It's convenient when writing
@@ -256,43 +275,44 @@ data Freer :: Out -> [Effect] -> Type -> Type where
     ( forall cf eff r.
       ControlFlow cf r =>
       -- Why not just say that `r` (the constraint that our control flow puts
-      -- on return types) and `ef` (the constraint that `Freer` is actually
+      -- on return types) and `lb` (the constraint that `Freer` is actually
       -- tracking) are the same? Imagine we did `runChoice $ runState $ ...`.
-      -- The `runState` uses `Anything` as its constraint. If `r` and `ef` were
+      -- The `runState` uses `Anything` as its constraint. If `r` and `lb` were
       -- the same, then the result of `runState` would need to be `Eff Anything
       -- '[Choice] a`. Now we have a problem though because `runChoice`
       -- requires that the constraint be `Traversable`. We can't safely change
       -- from a less constrained constraint to a more constrained one, so we
-      -- become stuck. The solution is to instead require that whatever `ef`
+      -- become stuck. The solution is to instead require that whatever `lb`
       -- actually is, it's at least as powerful as `r`. Since all types that
       -- implement `Traversable` also implement `Anything`, `runState` can work
       -- with an `Eff Traversable ...` just fine. The downside to all this is
       -- that we get some ambiguous types. Luckily it's not hard to fix those;
       -- it just requires some explicit types when you call `unrestrict`.
-      ef `Implies` r ->
-      -- Once again we pass around an explicit proof of membership. Since the
-      -- effect we're interpreting is in scope when the interpreter runs, we
-      -- can also assume it is in scope when the effect is sent. This isn't
-      -- normally included in `freer` types, but it's practically useful.
-      eff `IsMember` es ->
+      lb `Implies` r ->
+      -- We pass around an explicit proof of membership. If the type we're
+      -- interpreting (`eff`) is within `es`, this must be `Just`. When would
+      -- `eff` not be in `es`? The `raise` function can cause this. This isn't
+      -- normally included in `freer` types, but it's important if the control
+      -- flow wants to distribute itself across multiple threads.
+      Maybe (eff `IsMember` es) ->
       -- Finally we have the parameter and return type for the continuation
       -- that we saw in the introduction (although specialized for Freer/Eff).
-      cf eff (Eff efSend esSend) x ->
-      cf eff (Eff ef es) a
+      cf eff (Eff lbSend ubSend esSend) x ->
+      cf eff (Eff lb ub es) a
     ) ->
-    Freer ef es a
+    Freer lb ub es a
 
-deriving instance Functor (Freer ef es)
+deriving instance Functor (Freer lb ub es)
 
-instance Applicative (Freer ef es) where
+instance Applicative (Freer lb ub es) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff lift next <*> m = Impure eff lift \implies member x -> next implies member x `cfApply` Eff m
+  Impure eff lb ub lift next <*> m = Impure eff lb ub lift \implies member x -> next implies member x `cfApply` Eff (const m)
 
-instance Monad (Freer ef es) where
+instance Monad (Freer lb ub es) where
   Pure ma >>= fmb = fmb ma
-  Impure eff lift next >>= fmb = Impure eff lift \implies member x -> next implies member x `cfBind` (Eff . fmb)
+  Impure eff lb ub lift next >>= fmb = Impure eff lb ub lift \implies member x -> next implies member x `cfBind` (Eff . const . fmb)
 
 -- | This `ControlFlow` class is essential to how Theseus works. When an
 -- interpreter wants to resume a computation that paused waiting for a value
@@ -313,41 +333,71 @@ instance Monad (Freer ef es) where
 -- about the things they contain.
 --
 -- The `r` parameter is the constraint `cf` puts on `wrap` in `cfRun`. In
--- `Freer`, it's tracked by the `ef` variable. There's a functional dependency
+-- `Freer`, it's tracked by the `lf` variable. There's a functional dependency
 -- between `cf` and `r` because each `cf` picks the constraint it'll depend on.
 class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -> r where
   cfApply :: Applicative f => cf eff f (a -> b) -> f a -> cf eff f b
   cfBind :: Monad f => cf eff f a -> (a -> f b) -> cf eff f b
 
+  -- This is a slightly weird function that has to do with finalizers. It
+  -- threads continuations through other continuations. This is needed because
+  -- we must call every continuation with something. It's easy to mess that up
+  -- though when you need to run an effect to figure out the value that's
+  -- passed to a continuation. I'm not convinced this is the right way to solve
+  -- the problem, but it's here for now. The parameters are basically the same
+  -- as `Impure` probably because it acts like a strange `bind` operator. The
+  -- function passed to it must be called exactly once.
+  cfOnce ::
+    lbSend `Implies` lb ->
+    Maybe (eff `IsMember` es) ->
+    ( forall cf eff r.
+      ControlFlow cf r =>
+      lb `Implies` r ->
+      Maybe (eff `IsMember` es) ->
+      cf eff (Eff lbSend ubSend esSend) a ->
+      cf eff (Eff lb ub es) b
+    ) ->
+    cf eff (Eff lb ub es) (Eff lbSend ubSend esSend a) ->
+    cf eff (Eff lb ub es) b
+
+  -- Another weird function that has to do with finalizers which I'm unsure
+  -- about. This allows you to interleave control flows together and is
+  -- required by some of the `cfOnce` implementations. It has some questionable
+  -- properties that I'm not happy with. The function passed to it must be
+  -- called exactly once.
+  cfPutMeIn ::
+    (forall a. Monoid (k a)) =>
+    Maybe (eff `IsMember` es) ->
+    (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
+    cf eff (Eff lb ub es) (Eff lbSend ubSend esSend (k a)) ->
+    cf eff (Eff lb ub es) (k b)
+
   -- This function wasn't included in the introduction because it's mostly just
   -- a tool for type tetris. It gives us a way of manipulating the `ef` and
   -- `es` parameters when we aren't interpreting effects.
   cfMap ::
-    -- These two `Implies` parameters tell us that `outEf` will be something
-    -- between `ef` and `r`. It might be less powerful than `ef`, but no less
-    -- powerful than `r`.
-    ef `Implies` outEf ->
-    outEf `Implies` r ->
-    (forall x. Eff ef es x -> Eff outEf outEs x) ->
-    cf eff (Eff ef es) a ->
-    cf eff (Eff outEf outEs) a
+    ub `Implies` ubSend ->
+    lb `Implies` r ->
+    (forall x. Eff lbSend ubSend esSend x -> Eff lb ub es x) ->
+    cf eff (Eff lbSend ubSend esSend) a ->
+    cf eff (Eff lb ub es) a
 
   -- | Another effect's handler needs to be threaded through the control flow.
   -- The handler will wrap the output in some type constrained by `r`
-  -- (technically constrained by `ef`, but ``ef `Implies` r`` so it's
+  -- (technically constrained by `lb`, but ``lb `Implies` r`` so it's
   -- constrained by `r` too). The most common `r` is `Anything` because most
   -- control flows do not care about the result. The next most common is
   -- `Traversable` so that you can partially inspect whatever is stored within.
   cfRun ::
-    (eff :> es, ef wrap) =>
-    ef `Implies` r ->
+    lb wrap =>
+    Maybe (eff `IsMember` es) ->
     -- | This function must be used linearly. Failing to call it causes
     -- finalizers to not be run. Calling it more than once causes local
     -- reasoning to fail. Since I'm not using the Linear Types extension,
     -- implementors must be careful.
-    (forall x. Eff ef es x -> Eff ef outEs (wrap x)) ->
-    cf eff (Eff ef es) a ->
-    cf eff (Eff ef outEs) (wrap a)
+    (forall x. Eff lb ub es x -> Eff lb ub outEs (wrap x)) ->
+    cf eff (Eff lb ub es) a ->
+    cf eff (Eff lb ub outEs) (wrap a)
 
 -- ## Freer Manipulators
 
@@ -358,24 +408,26 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
 -- class to convert an effect into a Union, then using `lift` to convert it
 -- into a Freer. The `send` function does all this for you so you probably
 -- don't need to call lift manually.
-lift :: Union es (Eff ef es) a -> Freer ef es a
-lift f = Impure f id \_ _ x -> x
+lift :: Union es (Eff lb ub es) a -> Freer lb ub es a
+lift f = Impure f idImply idImply id \_ _ x -> x
 
 -- | Perform an effect as long as it will be handled somewhere up the stack.
-send :: eff :> es => eff (Eff ef es) a -> Eff ef es a
-send eff = Eff $ lift $ inj eff
+send :: eff :> es => eff (Eff lb ub es) a -> Eff lb ub es a
+send eff = Eff $ const $ lift $ inj eff
 
 -- | Adds an extra unused effect onto the top of an effectful computation. This
 -- is helpful when you want to hide certain effects from pieces of code. For
--- example, if you specialize it to ``raise :: X :> es => Eff ef (X : es)
--- -> Eff ef es a``, then any uses of `X` in the input will use the inner
+-- example, if you specialize it to ``raise :: X :> es => Eff lb ub (X : es)
+-- -> Eff lb ub es a``, then any uses of `X` in the input will use the inner
 -- interpreter for `X` instead of the outermost one. Any uses of `X` after the
 -- `raise` will use the outermost one.
-raise :: Eff ef es a -> Eff ef (eff : es) a
-raise (Eff act) = Eff case act of
+raise :: Eff lb ub es a -> Eff lb ub (eff : es) a
+raise (Eff act) = Eff \facts -> case act facts of
   Pure a -> Pure a
-  Impure eff lifter next -> Impure
+  Impure eff lb ub lifter next -> Impure
     (raiseUnion eff)
+    lb
+    ub
     ( \case
         Deeper member -> lifter member
         -- Why is this impossible? When we raise a value, we know for certain
@@ -399,44 +451,36 @@ raise (Eff act) = Eff case act of
     )
     $ \implies -> \case
       {- HLINT ignore "Avoid lambda" -}
-      Deeper member -> \x -> withProof member $ cfMap idImply implies raise $ next implies member x
-      IsMember _ -> error "Impossible raise condition"
+      Just (Deeper member) -> \x -> cfMap idImply implies raise $ next implies (Just member) x
+      _ -> \x -> cfMap idImply implies raise $ next implies Nothing x
  where
-  raiseUnion :: Union es (Eff ef esSend) x -> Union (eff : es) (Eff ef esSend) x
+  raiseUnion :: Union es (Eff lb ub esSend) x -> Union (eff : es) (Eff lb ub esSend) x
   raiseUnion (This eff) = That (This eff)
   raiseUnion (That rest) = That $ raiseUnion rest
 
 -- | Like the raise function, but inserts the effect one layer deeper in the
 -- stack. This allows you to add private effects to the stack because only the
 -- outermost effect can see the raised effects.
-raiseUnder :: forall e eff ef es a. Eff ef (eff : es) a -> Eff ef (eff : e : es) a
-raiseUnder (Eff (Pure a)) = Eff $ pure a
-raiseUnder (Eff (Impure @_ @_ @esSend eff lifter next)) = Eff $ Impure (raiseUnderUnion eff) lifter' \implies -> \case
-  IsMember _ -> cfMap idImply implies raiseUnder . next implies getProof
-  Deeper (Deeper proof) -> \x -> withProof proof $ cfMap idImply implies raiseUnder $ next implies (Deeper proof) x
-  Deeper (IsMember _) -> error "Impossible raiseUnder + membership proof"
- where
-  lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)
-  lifter' l =
-    case l of
-      IsMember _ -> lifter getProof
-      Deeper (Deeper proof) -> lifter $ Deeper proof
-      -- The `raiseUnder` function is a bit different from `raise` in that it's
-      -- easy to trigger this runtime error. If you create a private effect and
-      -- try to send it to the sender, that will fail. This makes sense because
-      -- the private effect is only in es, not esSend. Both private effects and
-      -- the `lifter` are so useful that I'm willing to let it slide.
-      Deeper (IsMember _) -> error "In higher order effects, private effects cannot be run by the sender."
+raiseUnder :: forall e eff lb ub es a. Eff lb ub (eff : es) a -> Eff lb ub (eff : e : es) a
+raiseUnder (Eff act) = Eff \facts -> case act facts of
+  Pure a -> pure a
+  Impure @_ @_ @_ @esSend eff lb ub lifter next -> Impure (raiseUnderUnion eff) lb ub lifter' \implies -> \case
+    Just (IsMember _) -> cfMap idImply implies raiseUnder . next implies (Just getProof)
+    Just (Deeper (Deeper proof)) -> \x -> cfMap idImply implies raiseUnder $ next implies (Just $ Deeper proof) x
+    _ -> \x -> cfMap idImply implies raiseUnder $ next implies Nothing x
+   where
+    lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)
+    lifter' l =
+      case l of
+        IsMember _ -> lifter getProof
+        Deeper (Deeper proof) -> lifter $ Deeper proof
+        -- The `raiseUnder` function is a bit different from `raise` in that it's
+        -- easy to trigger this runtime error. If you create a private effect and
+        -- try to send it to the sender, that will fail. This makes sense because
+        -- the private effect is only in es, not esSend. Both private effects and
+        -- the `lifter` are so useful that I'm willing to let it slide.
+        Deeper (IsMember _) -> error "In higher order effects, private effects cannot be run by the sender."
 
-raiseUnderUnion :: Union (eff : es) (Eff efSend esSend) x -> Union (eff : e : es) (Eff efSend esSend) x
+raiseUnderUnion :: Union (eff : es) (Eff lbSend ubSend esSend) x -> Union (eff : e : es) (Eff lbSend ubSend esSend) x
 raiseUnderUnion (This eff) = This eff
 raiseUnderUnion (That rest) = That $ That rest
-
--- | Finishes running an Eff. If your Eff used IO, look in the IO module for
--- the runEffIO function instead. Depending on what other effects you've run,
--- you might need to use `unrestrict` so that the first parameter contains the
--- right constraint.
-runEff :: Eff Anything '[] a -> a
-runEff (Eff act) = case act of
-  Pure a -> a
-  Impure a _ _ -> case a of {}

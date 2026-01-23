@@ -59,6 +59,10 @@ data IsMember eff es where
   IsMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
   Deeper :: eff `IsMember` es -> IsMember eff (other : es)
 
+-- data MaybeMember eff es where
+--   JustMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
+--   NothingMember :: eff `IsMember` es -> IsMember eff (other : es)
+
 withProof :: IsMember eff es -> (eff :> es => x) -> x
 withProof (IsMember f) x = f x
 withProof (Deeper more) x = withProof more x

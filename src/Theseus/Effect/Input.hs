@@ -7,15 +7,15 @@ import Theseus.Eff
 data Input i :: Effect where
   Input :: Input i m i
 
-input :: Input i :> es => Eff ef es i
+input :: Input i :> es => Eff lb ub es i
 input = send Input
 
-runInput :: ef Identity => i -> Eff ef (Input i : es) a -> Eff ef es a
+runInput :: lb Identity => i -> Eff lb ub (Input i : es) a -> Eff lb ub es a
 runInput i = interpret_ \Input -> pure i
 
 -- | Create a resource with a finalizer that's guaranteed to run. The resource
 -- will be accessible using the `Input` effect.
-resource :: ef Identity => Eff ef es i -> (i -> Eff ef es ()) -> Eff ef (Input i : es) a -> Eff ef es a
+resource :: lb Identity => Eff lb ub es i -> (i -> Eff lb ub es ()) -> Eff lb ub (Input i : es) a -> Eff lb ub es a
 resource init finalizer act = do
   i <- init
-  finally (finalizer i) $ runInput i act
+  finally (runInput i act) (finalizer i)

@@ -67,10 +67,10 @@ data Terminal :: Effect where
 -- ways.
 
 -- A few things are introduced here. `Eff` is the Monad that our effect
--- system runs in. The `ef` parameter we'll ignore for now. The `es` parameter
--- is a type level list of effects. The `es` parameter will change as the
--- program runs and effects are handled and introduced. Within one "level" of
--- code (think all the actions within the same do block) it will remain the
+-- system runs in. The `lb` and `ub` parameters we'll ignore for now. The `es`
+-- parameter is a type level list of effects. The `es` parameter will change as
+-- the program runs and effects are handled and introduced. Within one "level"
+-- of code (think all the actions within the same do block) it will remain the
 -- same. You have to introduce new "levels" to change it. We'll see examples of
 -- that when we get to interpreting effects. By making `es` generic, we're
 -- saying that (almost) any list of effects will work. The `:>` constraint
@@ -80,16 +80,16 @@ data Terminal :: Effect where
 --
 -- It's possible for there to be multiple instances of the same effect in the
 -- stack. That's fine! The `:>` constraint will find the topmost one.
-writeLine :: Terminal :> es => String -> Eff ef es ()
+writeLine :: Terminal :> es => String -> Eff lb ub es ()
 writeLine line = send $ WriteLine line
 
-readLine :: Terminal :> es => Eff ef es String
+readLine :: Terminal :> es => Eff lb ub es String
 readLine = send ReadLine
 
 -- Now let's look at how we can use our effects. We'll implement a program that
 -- reads input from the user and echos what they provided 3 times.
 
-thrice :: Terminal :> es => Eff ef es ()
+thrice :: Terminal :> es => Eff lb ub es ()
 thrice = do
   lineToEcho <- readLine
   writeLine lineToEcho
@@ -106,23 +106,30 @@ thrice = do
 -- Let's create our first interpretation doing what you'd expect from
 -- a terminal effect: reading and writing to stdin and stdout.
 
--- Here we see our first use of `ef`. Honestly, `ef` is kind of messy The `ef`
--- variable is a Constraint on how interpreters are allowed to modify the
--- effectful computation's return type. Technical all interpreters wrap the
--- computation in some Functor. Most of the time that's `Identity`, so the
--- `interpret` function handles the wrapping and unwrapping for you. By adding
--- `ef Identity` as a constraint, we're saying that `Identity` must be
--- a wrapper that all other interpreters know how to handle. Once again, we
--- don't really care much about `ef` most of the time. Usually effect
--- interpreters support all wrappers and use the `Identity` wrapper themselves.
--- We only need this because a handful of uncommon (but powerful) interpreters
--- require it. If you're not writing one of those effects, just add `ef` to
--- your interpreter's type signature with whatever value the compiler requires.
+-- Here we see our first use of `lb`. Honestly, `lb` and `ub` are kind of
+-- messy. If the description that follows doesn't click, don't worry. The
+-- compiler is really good at telling you what to do with `lb` and `ub`. Just
+-- add the constraints when it says they're missing and you should be good. The
+-- `lb` and `ub` parameters are constraints on how interpreters are allowed to
+-- modify the effectful computation's return type. The `lb` type is a lower
+-- bound and the `ub` type is an upper bound. They're named that way because
+-- the lower bound can only get lower allowing in more types, and the upper
+-- bound can only get higher allowing in fewer types. If a type implements
+-- `ub`, it must implement `lb`. If some type implements `lb`, you know it's
+-- valid for the current interpreter. If some type implements `ub`, you know
+-- it's valid for all the interpreters that have run so far. Technically all
+-- interpreters wrap the computation in some Functor. Most of the time that's
+-- `Identity`, so the `interpret` function handles the wrapping and unwrapping
+-- for you. By adding `lb Identity` as a constraint, we're saying that
+-- `Identity` must be a wrapper that other interpreters know how to handle.
+-- Usually effect interpreters support all wrappers and use the `Identity`
+-- wrapper themselves. We only need this because a handful of uncommon (but
+-- powerful) interpreters require it.
 --
 -- The other constraint we have is for the `IOE` effect. IOE says that we can
 -- lift arbitrary IO operations into `Eff`. When `IOE` is a member of the
 -- effect stack, `Eff` implements `MonadIO`.
-runTerminal :: (ef Identity, IOE :> es) => Eff ef (Terminal : es) a -> Eff ef es a
+runTerminal :: (lb Identity, IOE :> es) => Eff lb ub (Terminal : es) a -> Eff lb ub es a
 runTerminal = interpret_ \case
   WriteLine line -> liftIO $ putStrLn line
   ReadLine -> liftIO getLine
@@ -145,26 +152,26 @@ thriceIO = runEffIO $ runTerminal thrice
 data HSpec :: Effect where
   ShouldBe :: (Show a, Eq a) => a -> a -> HSpec m ()
 
-shouldBe :: (Show a, Eq a, HSpec :> es) => a -> a -> Eff ef es ()
+shouldBe :: (Show a, Eq a, HSpec :> es) => a -> a -> Eff lb ub es ()
 shouldBe actual expected = send $ ShouldBe actual expected
 
-runHSpec :: (ef Identity, IOE :> es) => Eff ef (HSpec : es) a -> Eff ef es a
+runHSpec :: (lb Identity, IOE :> es) => Eff lb ub (HSpec : es) a -> Eff lb ub es a
 runHSpec = interpret_ \case
   ShouldBe actual expected -> liftIO $ actual `Test.shouldBe` expected
 
-runTest :: Eff Anything [HSpec, IOE] a -> Test.Expectation
+runTest :: Eff Anything Nonthing [HSpec, IOE, ExceptionalIO, Final IO] a -> Test.Expectation
 runTest = void . runEffIO . runHSpec
 
 -- Our test implementation of `Terminal` accepts a list of lines as input and
--- returns the list of lines that were output. Note the new `ef (OutputResult
+-- returns the list of lines that were output. Note the new `lb (OutputResult
 -- [String])` constraint. Internally our interpreter will use an `Output`
 -- interpreter that changes the return type of the computation (it adds the
 -- output to the returned value). The constraint ensures that any other
 -- interpreters will be OK with that. They all should be, but we need the
 -- constraint so Haskell can verify it.
 runTerminalMock ::
-  (HSpec :> es, ef (OutputResult [String]), ef Identity) =>
-  [String] -> Eff ef (Terminal : es) a -> Eff ef es ([String], a)
+  (HSpec :> es, lb (OutputResult [String]), lb Identity) =>
+  [String] -> Eff lb ub (Terminal : es) a -> Eff lb ub es ([String], a)
 runTerminalMock stdin action = do
   -- Here we see a couple new functions. First is `with` which just rearranges
   -- the order of parameters that interpreters take. Normally the action is the
@@ -275,19 +282,19 @@ data File tag :: Effect where
   ReadLineFrom :: OpenFile tag -> File tag m String
   WriteLineTo :: OpenFile tag -> String -> File tag m ()
 
-readLineFrom :: File tag :> es => OpenFile tag -> Eff ef es String
+readLineFrom :: File tag :> es => OpenFile tag -> Eff lb ub es String
 readLineFrom file = send $ ReadLineFrom file
 
-writeLineTo :: File tag :> es => OpenFile tag -> String -> Eff ef es ()
+writeLineTo :: File tag :> es => OpenFile tag -> String -> Eff lb ub es ()
 writeLineTo file line = send $ WriteLineTo file line
 
 -- This type signature should look pretty normal except for its use of the `ST`
 -- trick.
 withFile ::
-  (ef Identity, IOE :> es) =>
+  (lb Identity, IOE :> es) =>
   FilePath ->
-  (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
-  Eff ef es a
+  (forall tag. OpenFile tag -> Eff lb ub (File tag : es) a) ->
+  Eff lb ub es a
 -- Here we use the `resource` function. That's an interpreter for the `Input`
 -- effect which guarantees that the `close` method will be called when the
 -- interpreter is finished. If you're coming with experience in effect systems
@@ -315,7 +322,7 @@ withFile path action = with (action OpenFile) $ using (resource open close) $ in
 data FS :: Effect where
   -- Remember that `m` parameter on our effects from before? Now we're using
   -- it! We can call it `m` when we don't really care what it is, and we can
-  -- call it `Eff ef es` when we do. It's important to realize that this is not
+  -- call it `Eff lb ub es` when we do. It's important to realize that this is not
   -- the same `es` as we see in the interpreter's type signature. Functions
   -- like `interpret` and `using` manipulate the effect stack and introduce new
   -- scopes. There might be effects which are on the effect stack and in scope
@@ -326,19 +333,19 @@ data FS :: Effect where
   -- but really important, so I'll repeat it a few times in different ways as
   -- we go.
   Open ::
-    ef Identity =>
+    lb Identity =>
     FilePath ->
-    (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
-    FS (Eff ef es) a
+    (forall tag. OpenFile tag -> Eff lb ub (File tag : es) a) ->
+    FS (Eff lb ub es) a
 
 open ::
-  (FS :> es, ef Identity) =>
+  (FS :> es, lb Identity) =>
   FilePath ->
-  (forall tag. OpenFile tag -> Eff ef (File tag : es) a) ->
-  Eff ef es a
+  (forall tag. OpenFile tag -> Eff lb ub (File tag : es) a) ->
+  Eff lb ub es a
 open path action = send $ Open path action
 
-runFS :: (ef Identity, IOE :> es) => Eff ef (FS : es) a -> Eff ef es a
+runFS :: (lb Identity, IOE :> es) => Eff lb ub (FS : es) a -> Eff lb ub es a
 -- We're using `interpret` instead of `interpret_`. That changes a couple
 -- things.
 --
@@ -351,8 +358,8 @@ runFS :: (ef Identity, IOE :> es) => Eff ef (FS : es) a -> Eff ef es a
 -- are more effects available where `send` was called, but they both have
 -- a subset of the list that's shared.
 --
--- Second it changes the return type. Instead of returning an `Eff ef es x`, we
--- return an `Eff ef es (Eff efSend esSend x)`. The *send types represent the
+-- Second it changes the return type. Instead of returning an `Eff lb ub es x`, we
+-- return an `Eff lb ub es (Eff lb ubSend esSend x)`. The *send types represent the
 -- effect stack where the effect was sent. That nested `Eff` can be tricky to
 -- wrap your head around. In both cases, the `x` variable represents whatever
 -- type the effectful program needs to continue. In the first order case, we
@@ -362,7 +369,7 @@ runFS :: (ef Identity, IOE :> es) => Eff ef (FS : es) a -> Eff ef es a
 -- interpreter to calculate a value for `x`. What we gain though is the ability
 -- to use effects that are in scope where the effect was sent (aka effects that
 -- are in `esSend`). This allows us to interpret higher order effects because
--- the effect we're interpreting has type `FS (Eff efSend esSend) x`. We can
+-- the effect we're interpreting has type `FS (Eff lb ubSend esSend) x`. We can
 -- use the higher order parameters while calculating a value for `x`.
 runFS = interpret \sender (Open path action) ->
   -- We have to use `sender` so that the `IOE` constraint from `es` can be used
@@ -403,7 +410,7 @@ runFS = interpret \sender (Open path action) ->
 -- all cases), or we can make it public for the Effect. The last is the most
 -- public (all interpreters inherit the dependency and senders can see it) and
 -- the first is the least (no one can observe the dependency).
-runTerminalFile :: (ef Identity, FS :> es) => String -> String -> Eff ef (Terminal : es) a -> Eff ef es a
+runTerminalFile :: (lb Identity, FS :> es) => String -> String -> Eff lb ub (Terminal : es) a -> Eff lb ub es a
 runTerminalFile input output action = open input \ifile -> open output \ofile -> do
   -- Because of the lambdas, we have to use the lower level `raising` method to
   -- create our private effects. `raising` uses a class to calculate the

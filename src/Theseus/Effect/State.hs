@@ -15,25 +15,25 @@ data State s m a where
   Put :: s -> State s m ()
 
 -- | Retrieve the mutable value
-get :: State s :> es => Eff ef es s
+get :: State s :> es => Eff lb ub es s
 get = send Get
 
 -- | A convience function equivalent to `fmap f get`
-gets :: State s :> es => (s -> a) -> Eff ef es a
+gets :: State s :> es => (s -> a) -> Eff lb ub es a
 gets f = fmap f get
 
 -- | Sets the mutable state
-put :: State s :> es => s -> Eff ef es ()
+put :: State s :> es => s -> Eff lb ub es ()
 put s = send $ Put s
 
 -- | Uses a function to change the mutable state
-modify :: State s :> es => (s -> s) -> Eff ef es ()
+modify :: State s :> es => (s -> s) -> Eff lb ub es ()
 modify f = get >>= put . f
 
 type StateResult s = ((,) s)
 
 -- | Runs a state effect following the Lens Laws
-runState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es (s, a)
+runState :: lb (StateResult s) => s -> Eff lb ub (State s : es) a -> Eff lb ub es (s, a)
 runState s =
   -- This is an interpreter which changes the output. Instead of simply
   -- returning `a`, it returns `a` and the final value of the state.
@@ -41,21 +41,21 @@ runState s =
     -- Wrapping interpreters need to provide the value to continue with
     -- alongside an interpretation for the next instance of this effect. This
     -- gives us a natural way of keeping track of state.
-    Get -> pure (s, runState s)
-    Put s' -> pure ((), runState s')
+    Get -> (pure s, runState s)
+    Put s' -> (pure (), runState s')
 
 -- | Runs a state using `runState` returning only the final state.
-execState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es s
+execState :: lb (StateResult s) => s -> Eff lb ub (State s : es) a -> Eff lb ub es s
 execState s eff = fst <$> runState s eff
 
 -- | Runs a state using `runState` ignoring the final state.
-evalState :: ef (StateResult s) => s -> Eff ef (State s : es) a -> Eff ef es a
+evalState :: lb (StateResult s) => s -> Eff lb ub (State s : es) a -> Eff lb ub es a
 evalState s eff = snd <$> runState s eff
 
 -- | Keeps track of local state changes and only commits them to the outer
 -- state if control flow continues successfully. Something like a `throw` or an
 -- `empty` would not commit the transaction.
-transactionally :: (State s :> es, ef (StateResult s)) => Eff ef (State s : es) a -> Eff ef es a
+transactionally :: (State s :> es, lb (StateResult s)) => Eff lb ub (State s : es) a -> Eff lb ub es a
 transactionally action = do
   initial <- get
   (newS, a) <- runState initial action

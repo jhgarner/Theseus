@@ -1,3 +1,6 @@
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE ImpredicativeTypes #-}
+
 module Theseus.Interpreters where
 
 import Control.Monad.Identity
@@ -32,87 +35,93 @@ type Sender es esSend = (forall e. e :> es => (forall y. (e :> esSend => y) -> y
 -- | An interpreter for first order effects that use simple control flow and do
 -- not change the return type. Almost all effects will use this.
 interpret_ ::
-  forall eff ef es a.
-  ef Identity =>
-  Handler_ eff ef es ->
-  Eff ef (eff : es) a ->
-  Eff ef es a
+  forall eff lb ub es a.
+  lb Identity =>
+  Handler_ eff lb ub es ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es a
 interpret_ f = interpret (\_ eff -> pure <$> f eff)
 
-type Handler_ eff ef es =
-  forall esSend efSend x.
-  eff (Eff efSend esSend) x ->
-  Eff ef es x
+type Handler_ eff lb ub es =
+  forall esSend lbSend ubSend x.
+  eff (Eff lbSend ubSend esSend) x ->
+  Eff lb ub es x
 
 -- | An interpreter for higher order effects that use simple control flow and
 -- do not change the return type. Many higher order effects will use this.
 interpret ::
-  forall eff ef es a.
-  ef Identity =>
-  Handler eff ef es ->
-  Eff ef (eff : es) a ->
-  Eff ef es a
-interpret f =
+  forall eff lb ub es a.
+  lb Identity =>
+  Handler eff lb ub es ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es a
+interpret @eff f =
   fmap runIdentity . interpretRaw
+    isoSomeId
     (pure . Identity)
-    \eff sender next -> do
-      continueWith <- f sender eff
-      fmap Identity $ interpret f $ runIdentityCf $ next $ IdentityCf continueWith
+    \eff lb _ sender next -> Eff \facts -> do
+      case effUn facts $ f sender eff of
+        Pure a -> effUn facts $ fmap Identity $ interpret f $ runIdentityCf $ next implying (Just getProof) $ IdentityCf @eff a
+        Impure eff lb' ub' lifter next' -> Impure eff lb' ub' lifter $ \imply member x ->
+          cfOnce lb member (\imply' member' cf -> cfRun (fmap Deeper member') (fmap Identity . interpret f) $ next imply' (fmap Deeper member') cf) $ next' imply member x
 
 -- | The output is a computation that the sender can run to continue execution.
-type Handler eff ef es =
-  forall esSend efSend x.
+type Handler eff lb ub es =
+  forall esSend lbSend ubSend x.
   Sender (eff : es) esSend ->
-  eff (Eff efSend esSend) x ->
-  Eff ef es (Eff efSend esSend x)
+  eff (Eff lbSend ubSend esSend) x ->
+  Eff lb ub es (Eff lbSend ubSend esSend x)
 
 -- | An interpreter for higher order effects that use simple control flow and
 -- change the return type by wrapping the result in something else.
 interpretW ::
-  forall eff ef es a wrap.
-  ef wrap =>
-  (forall x. x -> Eff ef es (wrap x)) ->
-  HandlerW eff ef es wrap ->
-  Eff ef (eff : es) a ->
-  Eff ef es (wrap a)
+  forall eff lb ub es a wrap.
+  lb wrap =>
+  (forall x. x -> Eff lb ub es (wrap x)) ->
+  HandlerW eff lb ub es wrap ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es (wrap a)
 interpretW wrap f =
   interpretRaw
+    isoSomeId
     wrap
-    \eff sender next -> do
-      (continueWith, handleNext) <- f sender eff
-      handleNext $ runIdentityCf $ next $ IdentityCf continueWith
+    \eff lb _ sender next -> Eff \facts -> do
+      case first (effUn facts) $ f sender eff of
+        (Pure a, continue) -> effUn facts $ continue $ runIdentityCf $ next implying (Just getProof) $ IdentityCf @eff a
+        (Impure eff lb' ub' lifter next', continue) -> Impure eff lb' ub' lifter $ \imply member x ->
+          cfOnce lb member (\imply' member' cf -> cfRun (fmap Deeper member') continue $ next imply' (fmap Deeper member') cf) $ next' imply member x
 
 -- | The output of the handler is a value to continue with and a way of
 -- interpreting the next effect that's sent. This allows you to keep track of
 -- state.
-type HandlerW eff ef es wrap =
-  forall esSend efSend x a.
+type HandlerW eff lb ub es wrap =
+  forall esSend lbSend ubSend x.
   Sender (eff : es) esSend ->
-  eff (Eff efSend esSend) x ->
-  Eff ef es (Eff efSend esSend x, Eff ef (eff : es) a -> Eff ef es (wrap a))
+  eff (Eff lbSend ubSend esSend) x ->
+  (Eff lb ub es (Eff lbSend ubSend esSend x), forall a. Eff lb ub (eff : es) a -> Eff lb ub es (wrap a))
 
 -- | An interpreter for first order effects that use simple control flow and
 -- change the return type by wrapping the result in something else.
 interpretW_ ::
-  forall eff ef es a wrap.
-  ef wrap =>
-  (forall x. x -> Eff ef es (wrap x)) ->
-  HandlerW_ eff ef es wrap ->
-  Eff ef (eff : es) a ->
-  Eff ef es (wrap a)
-interpretW_ wrap f = interpretW wrap (\_ eff -> first pure <$> f eff)
+  forall eff lb ub es a wrap.
+  lb wrap =>
+  (forall x. x -> Eff lb ub es (wrap x)) ->
+  HandlerW_ eff lb ub es wrap ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es (wrap a)
+interpretW_ wrap f = interpretW wrap (\_ eff -> first (fmap pure) $ f eff)
 
-type HandlerW_ eff ef es wrap =
-  forall esSend efSend x a.
-  eff (Eff efSend esSend) x ->
-  Eff ef es (x, Eff ef (eff : es) a -> Eff ef es (wrap a))
+type HandlerW_ eff lb ub es wrap =
+  forall esSend lbSend ubSend x.
+  eff (Eff lbSend ubSend esSend) x ->
+  (Eff lb ub es x, forall a. Eff lb ub (eff : es) a -> Eff lb ub es (wrap a))
 
 -- | Proof that `total` is equal to `prefix ++ es`.
 class Subset total es where
   -- | This is used by the `using` function to add private effects to the effect
   -- stack. You can use it to do similar things in case `using` isn't flexible
   -- enough.
-  raising :: Eff ef (eff : es) a -> Eff ef (eff : total) a
+  raising :: Eff lb ub (eff : es) a -> Eff lb ub (eff : total) a
 
 -- Although GHC is fine with subset being the way it is, HLS randomly decides
 -- that I need to mark this as Incoherent for some reason. I don't know why.
@@ -130,19 +139,19 @@ instance Subset ls es => Subset (l : ls) es where
 -- a runtime error. This is because the private effect is not in scope for the
 -- sender, so there's no way to send it from there.
 using ::
-  forall eff handlerEs ef es a b.
+  forall eff handlerEs lb ub es a b.
   Subset handlerEs es =>
-  (Eff ef handlerEs a -> Eff ef es b) ->
-  (Eff ef (eff : handlerEs) a -> Eff ef handlerEs a) ->
-  Eff ef (eff : es) a ->
-  Eff ef es b
+  (Eff lb ub handlerEs a -> Eff lb ub es b) ->
+  (Eff lb ub (eff : handlerEs) a -> Eff lb ub handlerEs a) ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es b
 using deps interpret act = deps $ interpret $ raising act
 
 -- | Moves the effectful operation from the syntactic end of an interpretation
 -- to the beginning. For example, `interpret_ (\case -> ...) thing` becomes
 -- `with thing $ interpret_ \case ->...`. This is nice because it removes the
 -- awkward parentheses around large lambdas.
-with :: Eff ef (eff : es) a -> (Eff ef (eff : es) a -> Eff ef es b) -> Eff ef es b
+with :: Eff lb ub es' a -> (Eff lb ub es' a -> Eff lb ub es b) -> Eff lb ub es b
 with action interpret = interpret action
 
 data VoidEffect :: Effect
@@ -150,37 +159,41 @@ data VoidEffect :: Effect
 -- | Guarantees that the first parameter will run exactly once as soon as the
 -- second parameter is complete. This applies even if the second parameter uses
 -- effects that manipulate the control flow.
-finally :: ef Identity => Eff ef es () -> Eff ef es a -> Eff ef es a
-finally final (Eff (Pure a)) = final >> pure a
-finally final (Eff (Impure eff lifter next)) = Eff $ Impure eff lifter \imply member x ->
-  fmap runIdentity $ withProof member $ cfRun imply (fmap Identity . finally final) $ next imply member x
+finally :: lb Identity => Eff lb ub es a -> Eff lb ub es () -> Eff lb ub es a
+finally (Eff act) final = Eff \facts -> case act facts of
+  Pure a -> effUn facts $ final >> pure a
+  Impure eff lb ub lifter next -> Impure eff lb ub lifter \imply member x ->
+    fmap runIdentity $ cfRun member (fmap Identity . flip finally final) $ next imply member x
 
 -- | Interprets an effect with maximum flexibility. Unless your effect
 -- interpretation changes the control flow in strange ways, you probably want
 -- one of the other interpreter functions. This one is easier to use
 -- incorrectly.
 interpretRaw ::
-  forall a wrap eff ef es cf someEf.
-  (ef wrap, ControlFlow cf someEf, (ef `IsAtLeast` someEf)) =>
-  (forall x. x -> Eff ef es (wrap x)) ->
+  forall a wrap eff lb ub es.
+  wrap `IsoSome` lb ->
+  (forall x. x -> Eff lb ub es (wrap x)) ->
   -- | The continuation paramter MUST be used linearly. If you call it
   -- multiple times, the semantics will be confusing. If you call it zero
   -- times, finalizers will not run.
-  HandlerRaw eff ef es cf wrap ->
-  Eff ef (eff : es) a ->
-  Eff ef es (wrap a)
-interpretRaw wrap f (Eff act) = case act of
-  Pure a -> wrap a
-  Impure (This e) lifter next -> unrestrict $ f e (liftIt lifter) (next implyAtLeast getProof)
-  Impure (That rest) lifter next -> Eff $ Impure rest (lifter . Deeper) \imply member x ->
-    withProof member (cfRun imply (interpretRaw wrap f)) $ next imply (Deeper member) x
+  HandlerRaw eff lb ub es wrap ->
+  Eff lb ub (eff : es) a ->
+  Eff lb ub es (wrap a)
+interpretRaw iso@(IsoSome (Iso fromWrap toWrap)) wrap f (Eff act) = Eff \facts -> case act facts of
+  Pure a -> unEff (wrap a) facts
+  Impure (This e) lb ub lifter next -> unEff (f e lb ub (liftIt lifter) next) facts
+  Impure (That rest) lb ub lifter next ->
+    toWrap <$> Impure rest lb ub (lifter . Deeper) \imply member x ->
+      cfRun (fmap Deeper member) (fmap fromWrap . interpretRaw iso wrap f) $ next imply (fmap Deeper member) x
 
-type HandlerRaw eff ef es cf wrap =
-  ( forall a esSend efSend x.
-    eff (Eff efSend esSend) x ->
+type HandlerRaw eff lb ub es wrap =
+  ( forall a esSend lbSend ubSend x.
+    eff (Eff lbSend ubSend esSend) x ->
+    lbSend `Implies` lb ->
+    ub `Implies` ubSend ->
     Sender (eff : es) esSend ->
-    (cf eff (Eff efSend esSend) x -> cf eff (Eff ef (eff : es)) a) ->
-    Eff ef es (wrap a)
+    (forall cf run someEf. ControlFlow cf someEf => lb `Implies` someEf -> Maybe (run `IsMember` (eff : es)) -> cf run (Eff lbSend ubSend esSend) x -> cf run (Eff lb ub (eff : es)) a) ->
+    Eff lb ub es (wrap a)
   )
 
 -- | Read this as
@@ -194,10 +207,16 @@ liftIt f = withProof (f getProof)
 -- | Allows us to weaken the constraint on Eff. For example, you can turn
 -- a Traversable constraint into an Anything constraint. The other direction is
 -- not possible.
-unrestrict :: forall ef newEf es a. ef `IsAtLeast` newEf => Eff ef es a -> Eff newEf es a
-unrestrict (Eff (Pure a)) = Eff $ Pure a
-unrestrict (Eff (Impure eff lift continue)) = Eff $ Impure eff lift \implying member ->
-  withProof member (cfMap implyAtLeast implying unrestrict) . continue (transImply implyAtLeast implying) member
+unrestrict ::
+  forall lbSend ubSend lb ub es a.
+  (lbSend `IsAtLeast` lb, ub `IsAtLeast` ubSend) =>
+  ubSend `Implies` lbSend ->
+  Eff lbSend ubSend es a ->
+  Eff lb ub es a
+unrestrict boundedSend (Eff act) = Eff \_ -> case act $ Facts boundedSend of
+  Pure a -> Pure a
+  Impure eff lb ub lift continue -> Impure eff (transImply lb implyAtLeast) (transImply implyAtLeast ub) lift \implying member ->
+    cfMap implyAtLeast implying (unrestrict boundedSend) . continue (transImply implyAtLeast implying) member
 
 -- | The simplest control flow. It represents a straight line or a single
 -- thread.
@@ -207,30 +226,91 @@ newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
 instance ControlFlow IdentityCf Anything where
   IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
   IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
+  cfOnce ogLb member handler (IdentityCf @eff fea) = IdentityCf do
+    matchOn fea >>= \case
+      Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
+      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+        cfOnce ogLb member handler $ next imply member x
+  cfPutMeIn _ f (IdentityCf fka) = IdentityCf do
+    matchOn fka >>= \case
+      Pure a -> f a
+      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+        cfPutMeIn member f $ next imply member x
   cfMap _ _ efToOut (IdentityCf fa) = IdentityCf $ efToOut fa
   cfRun _ handler (IdentityCf fa) = IdentityCf $ handler fa
 
 -- | Replaces one interpretation with another.
 interposeRaw ::
-  (eff :> es, ef wrap, ControlFlow cf someEf) =>
-  ef `Implies` someEf ->
+  (eff :> es, lb wrap, ControlFlow cf r) =>
+  lb `Implies` r ->
   (forall x. x -> wrap x) ->
-  IHandlerRaw eff ef es cf wrap ->
-  Eff ef es a ->
-  Eff ef es (wrap a)
-interposeRaw topImply ret f (Eff act) = case act of
+  IHandlerRaw eff lb ub es cf wrap ->
+  Eff lb ub es a ->
+  Eff lb ub es (wrap a)
+interposeRaw topImply ret f (Eff act) = Eff \facts -> case act facts of
   Pure a -> pure $ ret a
-  Impure union lifter next -> case prj union of
-    Just eff -> unrestrict $ f eff (liftIt lifter) (next topImply getProof)
-    Nothing -> Eff $ Impure union lifter \imply member ->
-      withProof member (cfRun imply (interposeRaw topImply ret f)) . next imply member
+  Impure union lb ub lifter next -> case prj union of
+    Just eff -> effUn facts $ f eff lb ub (liftIt lifter) (next topImply $ Just getProof)
+    Nothing -> Impure union lb ub lifter \imply member ->
+      cfRun member (interposeRaw topImply ret f) . next imply member
 
 -- | A handler for an interposition.
-type IHandlerRaw eff ef es cf wrap =
-  ( forall esSend efSend x a.
+type IHandlerRaw eff lb ub es cf wrap =
+  ( forall esSend lbSend ubSend x a.
     eff :> es =>
-    eff (Eff efSend esSend) x ->
+    eff (Eff lbSend ubSend esSend) x ->
+    lbSend `Implies` lb ->
+    ub `Implies` ubSend ->
     Sender es esSend ->
-    (cf eff (Eff efSend esSend) x -> cf eff (Eff ef es) a) ->
-    Eff ef es (wrap a)
+    (cf eff (Eff lbSend ubSend esSend) x -> cf eff (Eff lb ub es) a) ->
+    Eff lb ub es (wrap a)
   )
+
+-- ## Finish Interpreting an Eff
+
+-- | Finishes running an Eff. If your Eff used IO, look in the IO module for
+-- the runEffIO function instead. Depending on what other effects you've run,
+-- you might need to use `unrestrict` so that the first parameter contains the
+-- right constraint.
+runEff :: Eff Anything Nonthing '[] a -> a
+runEff (Eff act) = case act (Facts implying) of
+  Pure a -> a
+  Impure a _ _ _ _ -> case a of {}
+
+-- | Lifts a Monad into an Effect. This will likely be the last thing in your
+-- effect list.
+data Final m f a where
+  Final :: m a -> Final m f a
+
+-- | Finishes running an Eff by translating it into some Monad `m`. You must be
+-- careful about how `m` changes control flow. The `fmap` implementation on your
+-- `m` should call the function passed exactly once. The IO module handles the
+-- common case for the `IO` type by getting rid of Exceptions.
+runEffM :: Monad m => Eff Anything Nonthing '[Final m] a -> m a
+runEffM @m =
+  runEff . interpretRaw isoSomeId (pure . pure) \(Final ma) _ _ _ next ->
+    pure $ runEffM =<< getComposeCf (next implying (Just getProof) $ ComposeCf @m @(Final m) $ fmap pure ma)
+
+newtype ComposeCf f eff g a = ComposeCf {getComposeCf :: f (g a)}
+  deriving (Functor)
+
+instance Functor m => ControlFlow (ComposeCf m) Anything where
+  ComposeCf mfab `cfApply` fa = ComposeCf $ fmap (<*> fa) mfab
+  ComposeCf mfa `cfBind` afb = ComposeCf $ fmap (>>= afb) mfa
+  cfOnce ogLb member handler (ComposeCf @_ @eff cf) = ComposeCf do
+    thing <- cf
+    pure do
+      matchOn thing >>= \case
+        Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
+        Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+          cfOnce ogLb member handler $ next imply member x
+  cfPutMeIn _ f (ComposeCf @_ cf) = ComposeCf do
+    thing <- cf
+    pure do
+      matchOn thing >>= \case
+        Pure a -> f a
+        Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
+          cfPutMeIn member f $ next imply member x
+
+  cfMap _ _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa
+  cfRun _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa

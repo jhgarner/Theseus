@@ -16,7 +16,7 @@ import Theseus.Effect.Input
 -- management. Although it's not interacting with real IO to read the file, you
 -- can still trace it doing what it should through the printlns.
 testFileExample :: IO ()
-testFileExample = void $ runEffIO $ unrestrict @Traversable $ runCollect $ collect $ runFS $ do
+testFileExample = void $ runEffIO $ unrestrict @Traversable @Traversable implying $ runCollect $ collect $ runFS $ do
   file <- pure "a.txt" <|> pure "b.txt"
   withFile file \handle -> do
     contents <- readHandle handle
@@ -52,12 +52,12 @@ newtype Handle fs = Handle String -- Pretend like there's real data here
 data FS :: Effect where
   -- It uses the runST trick to make sure the Handle isn't used outside its
   -- scope.
-  WithFile :: ef Identity => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> FS (Eff ef es) a
+  WithFile :: lb Identity => String -> (forall fs. Handle fs -> Eff lb ub (File fs : es) a) -> FS (Eff lb ub es) a
 
-withFile :: (FS :> es, ef Identity) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
+withFile :: (FS :> es, lb Identity) => String -> (forall fs. Handle fs -> Eff lb ub (File fs : es) a) -> Eff lb ub es a
 withFile s action = send $ WithFile s action
 
-runFS :: (IOE :> es, ef Identity) => Eff ef (FS : es) a -> Eff ef es a
+runFS :: (IOE :> es, lb Identity) => Eff lb ub (FS : es) a -> Eff lb ub es a
 runFS = interpret \sender (WithFile file action) -> do
   liftIO $ putStrLn $ "Opening file " ++ file
   -- We can use effects that are in scope for the interpreter within the scope
@@ -68,13 +68,13 @@ data File fs :: Effect where
   ReadHandle :: Handle fs -> File fs m String
   WriteHandle :: Handle fs -> String -> File fs m ()
 
-readHandle :: File fs :> es => Handle fs -> Eff ef es String
+readHandle :: File fs :> es => Handle fs -> Eff lb ub es String
 readHandle handle = send $ ReadHandle handle
 
-writeHandle :: File fs :> es => Handle fs -> String -> Eff ef es ()
+writeHandle :: File fs :> es => Handle fs -> String -> Eff lb ub es ()
 writeHandle handle s = send $ WriteHandle handle s
 
-runFile :: (ef Identity, IOE :> es) => String -> (forall fs. Handle fs -> Eff ef (File fs : es) a) -> Eff ef es a
+runFile :: (lb Identity, IOE :> es) => String -> (forall fs. Handle fs -> Eff lb ub (File fs : es) a) -> Eff lb ub es a
 -- The `resource` function creates an `Input` effect whose interpretation
 -- ensures that the finalizer is always run.
 runFile name act = with (act $ Handle name) $ using (resource openFile closeFile) $ interpret_ \case

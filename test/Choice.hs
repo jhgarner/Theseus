@@ -12,20 +12,20 @@ testChoice :: SpecWith ()
 testChoice = do
   describe "Choice" do
     it "runs all permutations" do
-      ["ac", "ad", "bc", "bd"] === runEff $ unrestrict @Traversable $ runChoice do
+      ["ac", "ad", "bc", "bd"] === runEff $ unrestrict @Traversable @Traversable implying $ runChoice do
         x <- pure "a" <|> pure "b"
         y <- pure "c" <|> pure "d"
         pure $ x ++ y
 
     it "skips empty branches" do
-      ["ac", "bc", "bd"] === runEff $ unrestrict @Traversable $ runChoice do
+      ["ac", "bc", "bd"] === runEff $ unrestrict @Traversable @Traversable implying $ runChoice do
         x <- pure "a" <|> pure "b"
         y <- pure "c" <|> pure "d"
         let result = x ++ y
         if result == "ad" then empty else pure result
 
     it "doesn't blow up when nesting runChoices" do
-      ["az", "ac", "az", "ad", "bz", "bc", "bz", "bd"] === runEff $ unrestrict @Traversable $ runChoice do
+      ["az", "ac", "az", "ad", "bz", "bc", "bz", "bd"] === runEff $ unrestrict @Traversable @Traversable implying $ runChoice do
         x <- pure "a" <|> pure "b"
         yList <- runChoice do pure "z" <|> raise (pure "c" <|> pure "d")
         y <- asum $ pure <$> yList
@@ -37,7 +37,7 @@ testChoice = do
     -- on the outside of a `runChoice` or on the inside.
     describe "State" do
       -- First we need to define the program we'll be running.
-      let program :: forall es. (Choice :> es, State String :> es) => Eff Traversable es String
+      let program :: forall es. (Choice :> es, State String :> es) => Eff Traversable Traversable es String
           program = do
             prefix <- pure "left" <|> pure "right"
             suffix <- pure "left" <|> pure "right"
@@ -64,7 +64,7 @@ testChoice = do
             ]
           )
           === runEff
-          $ unrestrict @Traversable
+          $ unrestrict @Traversable implying
           $ runState "test"
           $ runChoice program
       it "uses global state when state is inside" do
@@ -74,14 +74,14 @@ testChoice = do
           , (final, final)
           ]
           === runEff
-          $ unrestrict @Traversable
+          $ unrestrict @Traversable implying
           $ runChoice
           $ runState "test" program
     describe "Catch" do
       -- Throw, like State, operates using global semantics. As we'll see, this
       -- means the scoping and behavior matches the syntax tree.
       it "covers all cases when nothing is thrown" do
-        ["a test c", "a test d", "b test c", "b test d"] === runEff $ unrestrict @Traversable $ runCollect $ runCatch $ collect do
+        ["a test c", "a test d", "b test c", "b test d"] === runEff $ unrestrict @Traversable @Traversable implying $ runCollect $ runCatch $ collect do
           prefix <- pure "a" <|> pure "b"
           suffix <- catch
             do pure "c" <|> pure "d"
@@ -94,7 +94,7 @@ testChoice = do
     -- together, not each path locally. If any one of the paths throw, it
     -- affects all the paths.
     it "exits early from all inner branches when an error is thrown" do
-      ["ac", "bc"] === runEff $ unrestrict @Traversable $ runCollect $ runCatch $ collect do
+      ["ac", "bc"] === runEff $ unrestrict @Traversable @Traversable implying $ runCollect $ runCatch $ collect do
         x <- pure "a" <|> pure "b"
         y <- catch
           do pure "d" <|> throw ()
@@ -109,7 +109,7 @@ testChoice = do
         ["prefix test a", "prefix test b"] === runEff $ do
           -- We expect 4 calls to yield
           let handleYields = foldr (>=>) doneCoroutine $ replicate 4 yieldCoroutine
-          handleYields $ unrestrict @Traversable $ runChoice do
+          handleYields $ unrestrict @Traversable @Traversable implying $ runChoice do
             suffix <- (unitYield >> pure "a") <|> (unitYield >> pure "b")
             prefix <- unitYield >> pure "prefix"
             pure $ prefix ++ " test " ++ suffix

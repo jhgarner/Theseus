@@ -1,9 +1,9 @@
 # Theseus
 
-Welcome to the hub for Theseus, an effect system library for Haskell. Theseus is
-an effect system that supports algebraic effects (including Coroutine), many
-higher order effects, and is designed so that semantics do not change when
-effects are reordered.
+Welcome to the hub for Theseus, an experimental effect system library for
+Haskell. Theseus is an effect system that supports algebraic effects (including
+Coroutine), many higher order effects, and is designed so that semantics do not
+change when effects are reordered.
 
 We'll explore how, much like the Ship of Theseus, programs can be deconstructed
 and rebuilt without changing what they are.

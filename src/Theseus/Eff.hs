@@ -4,9 +4,14 @@ module Theseus.Eff (
   -- how Theseus works.
 
   -- * General Effect Machinery
-  Eff (Eff),
+  Eff (Eff, unEff),
+  getFacts,
+  effUn,
+  matchOn,
+  Facts (Facts, bounded),
   ControlFlow (..),
   Anything,
+  Nonthing,
   Implies (..),
   Iso (..),
   IsoSome (..),
@@ -14,6 +19,7 @@ module Theseus.Eff (
   isoImplying,
   IsAtLeast (..),
   implying,
+  transImply,
   Effect,
   Freer (Pure, Impure),
   unrestrict,
@@ -23,7 +29,11 @@ module Theseus.Eff (
   Subset (raising),
   send,
   runEff,
-  (:>),
+  Final (Final),
+  runEffM,
+  (:>) (getProof),
+  IsMember,
+  withProof,
   (:>>),
 
   -- * Handling Effects
@@ -43,6 +53,7 @@ module Theseus.Eff (
   interpretRaw,
   IHandlerRaw,
   interposeRaw,
+  IdentityCf (IdentityCf, runIdentityCf),
 
   -- * Reexports
   Identity,
