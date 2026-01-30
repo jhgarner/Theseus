@@ -160,8 +160,8 @@ poseChoice isoUb imply action = do
 runMany :: [] `IsoSome` ub -> Maybe (Choice `IsMember` es) -> ManyItems lb ub es a -> Eff lb ub es [a]
 runMany listIso (Just proof) (ManyItems travProof start go) = withProof proof do
   join <$> poseChoice listIso travProof do
-    inits <- start
-    results <- traverse (poseChoice listIso travProof . go) inits
+    inits <- poseChoice listIso travProof start
+    results <- traverse (poseChoice listIso travProof . go) $ join inits
     pure $ join results
 -- In this case we know that none of the computations will use `Choice`, so we
 -- don't need to distribute.
@@ -169,7 +169,7 @@ runMany _ Nothing (ManyItems _ start go) = do
   inits <- start
   traverse go inits
 
-instance (Choice :> es, lb [], lb `IsAtLeast` Traversable) => Alternative (Eff lb ub es) where
+instance Choice :> es => Alternative (Eff lb ub es) where
   empty = send Empty
   a <|> b =
     send Choose >>= \case
