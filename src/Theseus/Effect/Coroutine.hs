@@ -22,7 +22,7 @@ yield a = send $ Yield a
 -- can be resumed.
 runCoroutine :: forall a b c lb ub es. lb (Status lb ub es a b) => Eff lb ub (Coroutine a b : es) c -> Eff lb ub es (Status lb ub es a b c)
 runCoroutine = interpretRaw isoSomeId (pure . Done) \(Yield a) _ _ _ next ->
-  case next implying (Just $ getProof @(Coroutine a b)) $ Yielding pure of
+  case evalCf implying (Just $ getProof @(Coroutine a b)) next $ Yielding pure of
     Yielding yielding -> pure $ Yielded a yielding
 
 -- | It is essential that the function provided by `Yielded` be used exactly
@@ -36,15 +36,17 @@ newtype Yielding b eff m c = Yielding {yielded :: b -> m c}
 instance ControlFlow (Yielding b) Anything where
   Yielding bmc `cfApply` fa = Yielding \b -> bmc b <*> fa
   Yielding bmc `cfBind` afb = Yielding $ bmc >=> afb
-  cfOnce ogLb member handler (Yielding @_ @eff go) = Yielding \b -> do
+  cfOnce ogLb member lifter handler (Yielding @_ @eff go) = Yielding \b -> do
     matchOn (go b) >>= \case
       Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        cfOnce ogLb member handler $ next imply member x
+      Impure eff lb ub lifter' next -> Eff \_ ->
+        Impure eff lb ub lifter' $ CfOnce ogLb lifter handler next
   cfPutMeIn _ f (Yielding go) = Yielding \b -> do
     matchOn (go b) >>= \case
       Pure a -> f a
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        cfPutMeIn member f $ next imply member x
-  cfMap _ _ handler (Yielding bmc) = Yielding $ handler . bmc
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $ CfPutMeIn f next
+  cfUnrestrict _ bounded ub lb (Yielding bmc) = Yielding $ unrestrict' bounded ub lb . bmc
+  cfRaise (Yielding bmc) = Yielding $ raise . bmc
+  cfRaiseUnder (Yielding bmc) = Yielding $ raiseUnder . bmc
   cfRun _ handler (Yielding bmc) = Yielding $ handler . bmc

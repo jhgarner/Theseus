@@ -49,6 +49,7 @@ manyUn = flip unMany
 data ManyItems lb ub es a where
   ManyItems ::
     lb `Implies` Traversable ->
+    Maybe (Choice `IsMember` es) ->
     -- These are the current values across all our threads of computation.
     Eff lb ub es [a] ->
     -- This is the operation we'd like to run on each thread.
@@ -60,24 +61,34 @@ deriving instance Functor (Many eff m)
 
 instance ControlFlow Many Traversable where
   Many act `cfApply` fa = Many \listIso -> case act listIso of
-    ManyItems travProof start go -> ManyItems travProof start ((<*> fa) . go)
+    ManyItems travProof member start go -> ManyItems travProof member start ((<*> fa) . go)
   Many act `cfBind` afb = Many \listIso -> case act listIso of
-    ManyItems travProof start go -> ManyItems travProof start (go >=> afb)
-  cfMap ub isTrav handler (Many act) = Many \listIso -> case act (isoImplying listIso ub) of
-    ManyItems _ start go -> ManyItems isTrav (handler start) (handler . go)
-  cfOnce @_ @_ @eff implySend member' handler (Many act) = Many \listIso -> case act listIso of
-    many@(ManyItems travProof _ _) -> ManyItems travProof newStart pure
+    ManyItems travProof member start go -> ManyItems travProof member start (go >=> afb)
+  cfRaise (Many act) = Many \listIso -> case act listIso of
+    ManyItems isTrav member start go -> ManyItems isTrav (fmap Deeper member) (raise start) (raise . go)
+  cfRaiseUnder (Many act) = Many \listIso -> case act listIso of
+    ManyItems isTrav member start go -> ManyItems isTrav deeperMember (raiseUnder start) (raiseUnder . go)
+     where
+      deeperMember = case member of
+        Nothing -> Nothing
+        Just (IsMember _) -> Just getProof
+        Just (Deeper rest) -> Just $ Deeper $ Deeper rest
+  cfUnrestrict bound bounded ub lb (Many act) = Many \listIso -> case act (isoImplying listIso ub) of
+    ManyItems _ member start go -> ManyItems bound member (unrestrict' bounded ub lb start) (unrestrict' bounded ub lb . go)
+  cfOnce @_ @_ @eff implySend member' lifter handler (Many act) = Many \listIso -> case act listIso of
+    many@(ManyItems travProof member _ _) -> ManyItems travProof member newStart pure
      where
       implied = transImply implySend travProof
       newStart = do
         matchOn (sequenceA <$> runMany listIso member' many) >>= \case
           Pure as ->
-            case handler travProof member' $ Many $ const $ ManyItems (transImply implySend travProof) as pure of
+            case handler travProof member' $ Many $ const $ ManyItems (transImply implySend travProof) (member >>= lifter) as pure of
               Many act -> runMany listIso member' $ act listIso
-          Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-            cfPutMeIn member (\starts -> runMany listIso member' $ manyUn listIso $ handler @_ @eff travProof member' $ Many \_ -> ManyItems implied starts pure) $ next imply member x
-  cfPutMeIn member f (Many act) = Many \listIso -> case act listIso of
-    many@(ManyItems travProof _ _) -> ManyItems travProof newStart pure
+          Impure eff lb ub lifter' next -> Eff \_ ->
+            Impure eff lb ub lifter' $
+              CfPutMeIn (\starts -> runMany listIso member' $ manyUn listIso $ handler @_ @eff travProof member' $ Many \_ -> ManyItems implied (member >>= lifter) starts pure) next
+  cfPutMeIn _ f (Many act) = Many \listIso -> case act listIso of
+    many@(ManyItems travProof member _ _) -> ManyItems travProof member newStart pure
      where
       newStart = do
         matchOn (sequenceA <$> runMany listIso member many) >>= \case
@@ -85,8 +96,11 @@ instance ControlFlow Many Traversable where
           -- I should create some tests to either show why this is fine or show
           -- why it's bad.
           Pure as -> fmap pure $ f $ fmap fold as
-          Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-            fmap pure $ cfPutMeIn member f $ fmap fold <$> next imply member x
+          Impure eff lb ub lifter next -> Eff \_ ->
+            Impure eff lb ub lifter $
+              fmap pure $
+                CfPutMeIn f $
+                  fmap fold <$> next
 
   -- Most `Choice` implementations are depth first. They run one thread to
   -- completion, then they run the next. The problem with depth first is that
@@ -98,11 +112,11 @@ instance ControlFlow Many Traversable where
   -- because all the threads will join before the interpreter goes out of
   -- scope.
   cfRun member handler (Many act) = Many \listIso -> case act listIso of
-    many@(ManyItems imply@(Implies go) _ _) -> ManyItems imply newStart pure
+    many@(ManyItems imply@(Implies go) member' _ _) -> ManyItems imply member newStart pure
      where
       -- We require `Traversable` because we need to know how many threads made
       -- it past the other interpreter.
-      newStart = go \(Iso lr rl) -> fmap (fmap rl . sequenceA . lr) $ handler $ runMany listIso member many
+      newStart = go \(Iso lr rl) -> fmap (fmap rl . sequenceA . lr) $ handler $ runMany listIso member' many
 
 -- There we go! That's how Theseus handles nondeterminism while avoiding the
 -- handler ordering problems.
@@ -122,16 +136,16 @@ runChoice ::
   Eff lb ub (Choice : es) a ->
   Eff lb ub es [a]
 runChoice act = Eff \facts@Facts{bounded} -> effUn facts $ with act $ interpretRaw (isoImplying isoSomeId bounded) (pure . pure) \cases
-  Empty lb _ _ next ->
-    case manyUn isoSomeId $ next implyAtLeast (Just getProof) $ Many \_ -> ManyItems (transImply lb implyAtLeast) (pure []) pure of
-      ManyItems travProof start go ->
+  Empty lb _ lifter next ->
+    case manyUn isoSomeId $ evalCf implyAtLeast (Just getProof) next $ Many \_ -> ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure []) pure of
+      ManyItems travProof _ start go ->
         join <$> runChoice do
           inits <- start
           results <- traverse (poseChoice isoSomeId travProof . go) inits
           pure $ join results
-  Choose lb _ _ next ->
-    case manyUn isoSomeId $ next implyAtLeast (Just getProof) $ Many \_ -> ManyItems (transImply lb implyAtLeast) (pure [True, False]) pure of
-      ManyItems travProof start go ->
+  Choose lb _ lifter next ->
+    case manyUn isoSomeId $ evalCf implyAtLeast (Just getProof) next $ Many \_ -> ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure [True, False]) pure of
+      ManyItems travProof _ start go ->
         join <$> runChoice do
           inits <- start
           results <- traverse (poseChoice isoSomeId travProof . go) inits
@@ -149,23 +163,23 @@ poseChoice isoUb imply action = do
   Facts{bounded} <- getFacts
   IsoSome (Iso lg gl) <- pure $ isoImplying isoUb bounded
   fmap gl $ with action $ interposeRaw imply (lg . pure) \cases
-    Empty lb _ _ next ->
-      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (pure []) pure of
+    Empty lb _ sender next ->
+      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (Just $ sender @Choice getProof) (pure []) pure of
         many -> lg <$> runMany isoUb (Just getProof) many
-    Choose lb _ _ next ->
-      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (pure [True, False]) pure of
+    Choose lb _ sender next ->
+      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (Just $ sender @Choice getProof) (pure [True, False]) pure of
         many -> lg <$> runMany isoUb (Just getProof) many
 
 -- | Executes all the threads
 runMany :: [] `IsoSome` ub -> Maybe (Choice `IsMember` es) -> ManyItems lb ub es a -> Eff lb ub es [a]
-runMany listIso (Just proof) (ManyItems travProof start go) = withProof proof do
+runMany listIso (Just proof) (ManyItems travProof _ start go) = withProof proof do
   join <$> poseChoice listIso travProof do
     inits <- poseChoice listIso travProof start
     results <- traverse (poseChoice listIso travProof . go) $ join inits
     pure $ join results
 -- In this case we know that none of the computations will use `Choice`, so we
 -- don't need to distribute.
-runMany _ Nothing (ManyItems _ start go) = do
+runMany _ Nothing (ManyItems _ _ start go) = do
   inits <- start
   traverse go inits
 

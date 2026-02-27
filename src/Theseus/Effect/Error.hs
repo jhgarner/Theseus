@@ -46,17 +46,25 @@ instance ControlFlow (Thrown e) Anything where
   -- Note how it ignores the rhs of these operations. It acts a lot like Const.
   Thrown e f `cfApply` _ = Thrown e f
   Thrown e f `cfBind` _ = Thrown e f
-  cfMap _ _ handler (Thrown e f) = Thrown e $ handler f
-  cfOnce @_ @_ @eff _ member' handler (Thrown e f) = Thrown e do
+  cfUnrestrict _ bounded ub lb (Thrown e f) = Thrown e $ unrestrict' bounded ub lb f
+  cfRaise (Thrown e f) = Thrown e $ raise f
+  cfRaiseUnder (Thrown e f) = Thrown e $ raiseUnder f
+  cfOnce @_ @_ @eff _ member' _ handler (Thrown e f) = Thrown e do
     matchOn f >>= \case
       Pure () -> runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        fmap getConst $ cfPutMeIn member (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $ (\() -> pure $ Const ()) <$> next imply member x
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          fmap getConst $
+            CfPutMeIn (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $
+              fmap (\() -> pure $ Const ()) next
   cfPutMeIn _ f (Thrown e fin) = Thrown e do
     matchOn fin >>= \case
       Pure a -> void $ f $ pure a $> mempty
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        void $ cfPutMeIn member f $ (\() -> pure mempty) <$> next imply member x
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          void $
+            CfPutMeIn f $
+              fmap (\() -> pure mempty) next
 
   -- Note that we don't ignore the handler. This is because `cfRun` requires
   -- that the `handler` parameter be used linearly.
@@ -81,7 +89,7 @@ runThrow = interpretRaw isoSomeId (pure . pure) \(Throw e) _ _ _ next ->
   -- added the `suppressed` field to its exception types so that the original
   -- exception wouldn't be lost, we could do something similar. For now we just
   -- ignore the original exception.
-  fmap takeError $ runThrow $ finishThrown $ next implying (Just $ getProof @(Throw e)) $ Thrown e (pure ())
+  fmap takeError $ runThrow $ finishThrown $ evalCf implying (Just $ getProof @(Throw e)) next $ Thrown e (pure ())
 
 takeError :: Either e e -> Either e a
 takeError = either Left Left
@@ -90,7 +98,7 @@ takeError = either Left Left
 -- anything throws, the entire computation finishes with `Nothing`.
 runCatchNoRecovery :: (lb Maybe, lb `IsAtLeast` Traversable) => Eff lb ub (Catch : es) a -> Eff lb ub es (Maybe a)
 runCatchNoRecovery = interpretRaw isoSomeId (pure . pure) \(Catch action _) lb _ _ next -> do
-  ran <- runCatchNoRecovery $ runMaybeCf $ next implyAtLeast (Just $ getProof @Catch) $ MaybeCf (transImply lb implyAtLeast) $ either (const Nothing) Just <$> runThrow action
+  ran <- runCatchNoRecovery $ runMaybeCf $ evalCf implyAtLeast (Just $ getProof @Catch) next $ MaybeCf (transImply lb implyAtLeast) $ either (const Nothing) Just <$> runThrow action
   pure $ join ran
 
 data MaybeCf eff f a where
@@ -134,15 +142,18 @@ newtype NothingCf eff f a = NothingCf {runNothingCf :: f ()}
 instance ControlFlow MaybeCf Traversable where
   MaybeCf imply fmab `cfApply` fa = MaybeCf imply $ (\mab a -> fmap ($ a) mab) <$> fmab <*> fa
   MaybeCf imply fma `cfBind` afb = MaybeCf imply $ fma >>= traverse afb
-  cfOnce @_ @_ @eff lb' member' handler (MaybeCf imply' f) = MaybeCf imply' do
+  cfOnce @_ @_ @eff lb' member' _ handler (MaybeCf imply' f) = MaybeCf imply' do
     matchOn f >>= \case
       Pure (Just a) -> fmap Just $ runIdentityCf $ handler implying member' $ IdentityCf a
       Pure Nothing -> ($> Nothing) $ runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        -- TODO This is weird because it acts as a funnel converting all the
-        -- other threads of computation into a single one. That's probably
-        -- going to be confusing. Maybe everything should be lists?
-        fmap getFirst $ cfPutMeIn member (fmap First . runMaybeCf . handler @_ @eff imply' member' . MaybeCf (transImply lb' imply') . fmap getFirst) $ sequenceA . First <$> next imply member x
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          -- TODO This is weird because it acts as a funnel converting all the
+          -- other threads of computation into a single one. That's probably
+          -- going to be confusing. Maybe everything should be lists?
+          fmap getFirst $
+            CfPutMeIn (fmap First . runMaybeCf . handler @_ @eff imply' member' . MaybeCf (transImply lb' imply') . fmap getFirst) $
+              sequenceA . First <$> next
   cfPutMeIn _ f (MaybeCf imply' fin) = MaybeCf imply' do
     matchOn fin >>= \case
       Pure (Just a) -> Just <$> f a
@@ -152,25 +163,38 @@ instance ControlFlow MaybeCf Traversable where
       -- struggling to wrap my head around distributing vs not distributing
       -- effects.
       Pure Nothing -> Just <$> f (pure mempty)
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        fmap Just $ cfPutMeIn member f $ fromMaybe (pure mempty) <$> next imply member x
-  cfMap _ lb efToOut (MaybeCf _ fa) = MaybeCf lb $ efToOut fa
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          fmap Just $
+            CfPutMeIn f $
+              fromMaybe (pure mempty) <$> next
+  cfUnrestrict bound bounded ub lb (MaybeCf _ fa) = MaybeCf bound $ unrestrict' bounded ub lb fa
+  cfRaise (MaybeCf bound fa) = MaybeCf bound $ raise fa
+  cfRaiseUnder (MaybeCf bound fa) = MaybeCf bound $ raiseUnder fa
   cfRun _ handler (MaybeCf (Implies imply) fa) = imply \(Iso lr rl) -> MaybeCf (Implies imply) $ fmap rl . sequenceA . lr <$> handler fa
 
 instance ControlFlow NothingCf Anything where
   NothingCf fmab `cfApply` _ = NothingCf fmab
   NothingCf fma `cfBind` _ = NothingCf fma
-  cfOnce @_ @_ @eff _ member' handler (NothingCf f) = NothingCf do
+  cfOnce @_ @_ @eff _ member' _ handler (NothingCf f) = NothingCf do
     matchOn f >>= \case
       Pure () -> runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        fmap getConst $ cfPutMeIn member (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $ (\() -> pure $ Const ()) <$> next imply member x
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          fmap getConst $
+            CfPutMeIn (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $
+              fmap (\() -> pure $ Const ()) next
   cfPutMeIn _ f (NothingCf fin) = NothingCf do
     matchOn fin >>= \case
       Pure a -> void $ f $ pure a $> mempty
-      Impure eff lb ub lifter next -> Eff \_ -> Impure eff lb ub lifter \imply member x ->
-        void $ cfPutMeIn member f $ (\() -> pure mempty) <$> next imply member x
-  cfMap _ _ efToOut (NothingCf fin) = NothingCf $ efToOut fin
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          void $
+            CfPutMeIn f $
+              fmap (\() -> pure mempty) next
+  cfUnrestrict _ bounded ub lb (NothingCf fin) = NothingCf $ unrestrict' bounded ub lb fin
+  cfRaise (NothingCf fin) = NothingCf $ raise fin
+  cfRaiseUnder (NothingCf fin) = NothingCf $ raiseUnder fin
   cfRun _ handler (NothingCf fin) = NothingCf $ void $ handler fin
 
 newtype ComposeCfs eff cf f a = Composed {runComposed :: f ()}

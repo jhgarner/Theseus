@@ -4,6 +4,7 @@
 
 module Theseus.EffType where
 
+import Control.Monad
 import Control.Monad.Reader (ReaderT (ReaderT))
 import Data.Kind (Constraint, Type)
 import Theseus.Constraints
@@ -82,7 +83,7 @@ import Theseus.Union
 -- ```haskell
 -- data T1Freer f a where
 --  Pure :: a -> T1Freer f a
---  Impure :: f (T1Freer g) x -> (forall y. T1Freer g y -> T1Freer f y) -> (x -> T1Freer f a) -> T1Freer f a
+--  Impure :: f g x -> (forall y. g y -> T1Freer f y) -> (x -> T1Freer f a) -> T1Freer f a
 -- ```
 --
 -- We've added an existential `g` variable and a new continuation for handling
@@ -105,7 +106,7 @@ import Theseus.Union
 -- ```haskell
 -- data T2Freer f a where
 --  Pure :: a -> T2Freer f a
---  Impure :: f (T2Freer g) x -> (T2Freer g x -> T2Freer f a) -> T2Freer f a
+--  Impure :: f g x -> (g x -> T2Freer f a) -> T2Freer f a
 -- ```
 --
 -- Why do this? By merging the two continuations, we've limited how the
@@ -114,7 +115,7 @@ import Theseus.Union
 -- interpreter, controls. We've limited the kinds of higher order effects you
 -- can use, but in exchange we've regained the algebraic effects. On a side
 -- note, I think this is pretty close to the subset of higher order effects
--- known as "Scoped Effects" although it might be slightly more powerful.
+-- known as "Scoped Effects".
 --
 -- At this point we have a well functioning higher order effect system (or at
 -- least we should. That version of Theseus wasn't well tested). There are
@@ -126,8 +127,8 @@ import Theseus.Union
 -- might do important things like free resources. If you call it multiple
 -- times, you might duplicate operations that aren't idempotent like freeing
 -- resources. Having to pick between algebraic effects and resource management
--- is bad. Somewhat orthogonal to higher order effects, Theseus tries to fix
--- this problem too.
+-- is bad and many people pick resource management. Although orthogonal to
+-- higher order effects, Theseus tries to fix this problem too.
 --
 -- Theseus introduces a `ControlFlow` types and requires that the continuation
 -- in `freer` be called exactly once.
@@ -229,10 +230,10 @@ newtype Eff (lb :: Out) (ub :: Out) (es :: [Effect]) a
 newtype Facts lb ub = Facts {bounded :: ub `Implies` lb}
 
 getFacts :: Eff lb ub es (Facts lb ub)
-getFacts = Eff \facts -> pure facts
+getFacts = Eff pure
 
 matchOn :: Eff lb ub es a -> Eff lb ub es (Freer lb ub es a)
-matchOn (Eff act) = Eff \facts -> pure $ act facts
+matchOn (Eff act) = Eff $ pure . act
 
 effUn :: Facts lb ub -> Eff lb ub es a -> Freer lb ub es a
 effUn = flip unEff
@@ -266,15 +267,13 @@ data Freer :: Out -> Out -> [Effect] -> Type -> Type where
     -- scope when the effect is being sent. It's convenient when writing
     -- interpreters and intuitively makes sense even if it's sometimes a lie
     -- (see the `raise` functions for why it's sometimes a lie).
-    (forall eff. eff `IsMember` es -> eff `IsMember` esSend) ->
+    (forall eff. eff `IsMember` es -> Maybe (eff `IsMember` esSend)) ->
     -- Here starts the continuation parameter. This represents the rest of the
     -- computation. The type variables here are `cf` which stands for control
     -- flow, `eff` which is the effect we're interpreting, and `r` which is the
     -- constraint that the control flow puts on other interpreters. These all
     -- combine to say that the continuation works with any control flow.
-    ( forall cf eff r.
-      ControlFlow cf r =>
-      -- Why not just say that `r` (the constraint that our control flow puts
+    ( -- Why not just say that `r` (the constraint that our control flow puts
       -- on return types) and `lb` (the constraint that `Freer` is actually
       -- tracking) are the same? Imagine we did `runChoice $ runState $ ...`.
       -- The `runState` uses `Anything` as its constraint. If `r` and `lb` were
@@ -288,17 +287,16 @@ data Freer :: Out -> Out -> [Effect] -> Type -> Type where
       -- with an `Eff Traversable ...` just fine. The downside to all this is
       -- that we get some ambiguous types. Luckily it's not hard to fix those;
       -- it just requires some explicit types when you call `unrestrict`.
-      lb `Implies` r ->
+      -- lb `Implies` r ->
       -- We pass around an explicit proof of membership. If the type we're
       -- interpreting (`eff`) is within `es`, this must be `Just`. When would
       -- `eff` not be in `es`? The `raise` function can cause this. This isn't
       -- normally included in `freer` types, but it's important if the control
       -- flow wants to distribute itself across multiple threads.
-      Maybe (eff `IsMember` es) ->
+      -- Maybe (eff `IsMember` es) ->
       -- Finally we have the parameter and return type for the continuation
       -- that we saw in the introduction (although specialized for Freer/Eff).
-      cf eff (Eff lbSend ubSend esSend) x ->
-      cf eff (Eff lb ub es) a
+      CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a
     ) ->
     Freer lb ub es a
 
@@ -308,11 +306,17 @@ instance Applicative (Freer lb ub es) where
   pure = Pure
 
   Pure f <*> rhs = fmap f rhs
-  Impure eff lb ub lift next <*> m = Impure eff lb ub lift \implies member x -> next implies member x `cfApply` Eff (const m)
+  Impure eff lb ub lift (CfFmap xab cfx) <*> ma = Impure eff lb ub lift $ CfBind cfx (\x -> xab x <$> Eff (const ma))
+  Impure eff lb ub lift (CfApply cfxab mx) <*> ma = Impure eff lb ub lift $ CfBind cfxab (\xab -> xab <$> mx <*> Eff (const ma))
+  Impure eff lb ub lift (CfBind cfx xmab) <*> ma = Impure eff lb ub lift $ CfBind cfx (\x -> xmab x <*> Eff (const ma))
+  Impure eff lb ub lift next <*> m = Impure eff lb ub lift $ CfApply next (Eff (const m))
 
 instance Monad (Freer lb ub es) where
   Pure ma >>= fmb = fmb ma
-  Impure eff lb ub lift next >>= fmb = Impure eff lb ub lift \implies member x -> next implies member x `cfBind` (Eff . const . fmb)
+  Impure eff lb ub lift (CfFmap f next) >>= fmb = Impure eff lb ub lift $ CfBind next (Eff . const . fmb . f)
+  Impure eff lb ub lift (CfApply cfxa mx) >>= amb = Impure eff lb ub lift $ CfBind cfxa $ \xa -> mx >>= Eff . const . amb . xa
+  Impure eff lb ub lift (CfBind cfx xma) >>= amb = Impure eff lb ub lift $ CfBind cfx $ xma >=> Eff . const . amb
+  Impure eff lb ub lift next >>= fmb = Impure eff lb ub lift $ CfBind next (Eff . const . fmb)
 
 -- | This `ControlFlow` class is essential to how Theseus works. When an
 -- interpreter wants to resume a computation that paused waiting for a value
@@ -350,6 +354,7 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   cfOnce ::
     lbSend `Implies` lb ->
     Maybe (eff `IsMember` es) ->
+    Lifter es esSend ->
     ( forall cf eff r.
       ControlFlow cf r =>
       lb `Implies` r ->
@@ -375,11 +380,24 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   -- This function wasn't included in the introduction because it's mostly just
   -- a tool for type tetris. It gives us a way of manipulating the `ef` and
   -- `es` parameters when we aren't interpreting effects.
-  cfMap ::
-    ub `Implies` ubSend ->
+  -- cfMap ::
+  --   ub `Implies` ubSend ->
+  --   lb `Implies` r ->
+  --   (forall x. Eff lbSend ubSend esSend x -> Eff lb ub es x) ->
+  --   cf eff (Eff lbSend ubSend esSend) a ->
+  --   cf eff (Eff lb ub es) a
+  cfRaise ::
+    cf eff (Eff lb ub es) a ->
+    cf eff (Eff lb ub (e : es)) a
+  cfRaiseUnder ::
+    cf eff (Eff lb ub (e : es)) a ->
+    cf eff (Eff lb ub (e : newE : es)) a
+  cfUnrestrict ::
     lb `Implies` r ->
-    (forall x. Eff lbSend ubSend esSend x -> Eff lb ub es x) ->
-    cf eff (Eff lbSend ubSend esSend) a ->
+    ubSend `Implies` lbSend ->
+    ub `Implies` ubSend ->
+    lbSend `Implies` lb ->
+    cf eff (Eff lbSend ubSend es) a ->
     cf eff (Eff lb ub es) a
 
   -- | Another effect's handler needs to be threaded through the control flow.
@@ -390,7 +408,7 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
   -- `Traversable` so that you can partially inspect whatever is stored within.
   cfRun ::
     lb wrap =>
-    Maybe (eff `IsMember` es) ->
+    Maybe (eff `IsMember` outEs) ->
     -- | This function must be used linearly. Failing to call it causes
     -- finalizers to not be run. Calling it more than once causes local
     -- reasoning to fail. Since I'm not using the Linear Types extension,
@@ -398,6 +416,98 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
     (forall x. Eff lb ub es x -> Eff lb ub outEs (wrap x)) ->
     cf eff (Eff lb ub es) a ->
     cf eff (Eff lb ub outEs) (wrap a)
+
+data CF input f a where
+  CfIn :: CF (f a) f a
+  CfRun ::
+    lb wrap =>
+    -- Maybe (eff `IsMember` es) ->
+
+    -- | This function must be used linearly. Failing to call it causes
+    -- finalizers to not be run. Calling it more than once causes local
+    -- reasoning to fail. Since I'm not using the Linear Types extension,
+    -- implementors must be careful.
+    (forall x. Eff lb ub (e : es) x -> Eff lb ub es (wrap x)) ->
+    CF input (Eff lb ub (e : es)) a ->
+    CF input (Eff lb ub es) (wrap a)
+  CfInterpose ::
+    lb wrap =>
+    -- Maybe (eff `IsMember` es) ->
+
+    -- | This function must be used linearly. Failing to call it causes
+    -- finalizers to not be run. Calling it more than once causes local
+    -- reasoning to fail. Since I'm not using the Linear Types extension,
+    -- implementors must be careful.
+    (forall x. Eff lb ub es x -> Eff lb ub es (wrap x)) ->
+    CF input (Eff lb ub es) a ->
+    CF input (Eff lb ub es) (wrap a)
+  CfFmap :: (a -> b) -> CF input f a -> CF input f b
+  CfRaise ::
+    CF input (Eff lb ub es) a ->
+    CF input (Eff lb ub (e : es)) a
+  CfRaiseUnder ::
+    CF input (Eff lb ub (e : es)) a ->
+    CF input (Eff lb ub (e : newE : es)) a
+  CfUnrestrict ::
+    ubSend `Implies` lbSend ->
+    ub `Implies` ubSend ->
+    lbSend `Implies` lb ->
+    CF input (Eff lbSend ubSend es) a ->
+    CF input (Eff lb ub es) a
+  CfApply :: CF input f (a -> b) -> f a -> CF input f b
+  CfBind :: CF input f a -> (a -> f b) -> CF input f b
+  CfPutMeIn ::
+    (forall a. Monoid (k a)) =>
+    -- Maybe (eff `IsMember` es) ->
+    (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
+    CF input (Eff lb ub es) (Eff lbSend ubSend esSend (k a)) ->
+    CF input (Eff lb ub es) (k b)
+  CfOnce ::
+    lbSend `Implies` lb ->
+    Lifter es esSend ->
+    ( forall cf eff r.
+      ControlFlow cf r =>
+      lb `Implies` r ->
+      Maybe (eff `IsMember` es) ->
+      cf eff (Eff lbSend ubSend esSend) a ->
+      cf eff (Eff lb ub es) b
+    ) ->
+    CF input (Eff lb ub es) (Eff lbSend ubSend esSend a) ->
+    CF input (Eff lb ub es) b
+
+instance Functor f => Functor (CF input f) where
+  fmap f (CfFmap f' cf) = CfFmap (f . f') cf
+  fmap f cf = CfFmap f cf
+
+evalCf ::
+  ControlFlow cf r =>
+  lb `Implies` r ->
+  Maybe (eff `IsMember` es) ->
+  CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
+  cf eff (Eff lbSend ubSend esSend) x ->
+  cf eff (Eff lb ub es) a
+evalCf _ _ CfIn input = input
+evalCf bound member (CfFmap f rest) input = f <$> evalCf bound member rest input
+evalCf bound member (CfApply cfab ma) input = cfApply (evalCf bound member cfab input) ma
+evalCf bound member (CfBind cfma amb) input = cfBind (evalCf bound member cfma input) amb
+evalCf bound member (CfRun handler action) input = cfRun member handler (evalCf bound (fmap Deeper member) action input)
+evalCf bound member (CfInterpose handler action) input = cfRun member handler (evalCf bound member action input)
+evalCf bound member (CfRaise action) input = cfRaise $ evalCf bound (mine member) action input
+evalCf bound member (CfRaiseUnder action) input = cfRaiseUnder $ evalCf bound (mineUnder member) action input
+evalCf bound member (CfUnrestrict bounded ub lb action) input = cfUnrestrict bound bounded ub lb $ evalCf (transImply lb bound) member action input
+evalCf bound member (CfPutMeIn run action) input = cfPutMeIn member run $ evalCf bound member action input
+evalCf bound member (CfOnce lb lifter run action) input = cfOnce lb member lifter run $ evalCf bound member action input
+
+mine :: Maybe (eff `IsMember` (e : es)) -> Maybe (eff `IsMember` es)
+mine Nothing = Nothing
+mine (Just (IsMember _)) = Nothing
+mine (Just (Deeper rest)) = Just rest
+
+mineUnder :: Maybe (eff `IsMember` (e : eNew : es)) -> Maybe (eff `IsMember` (e : es))
+mineUnder Nothing = Nothing
+mineUnder (Just (IsMember _)) = Just getProof
+mineUnder (Just (Deeper (IsMember _))) = Nothing
+mineUnder (Just (Deeper (Deeper rest))) = Just $ Deeper rest
 
 -- ## Freer Manipulators
 
@@ -409,7 +519,7 @@ class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -
 -- into a Freer. The `send` function does all this for you so you probably
 -- don't need to call lift manually.
 lift :: Union es (Eff lb ub es) a -> Freer lb ub es a
-lift f = Impure f idImply idImply id \_ _ x -> x
+lift f = Impure f idImply idImply Just CfIn
 
 -- | Perform an effect as long as it will be handled somewhere up the stack.
 send :: eff :> es => eff (Eff lb ub es) a -> Eff lb ub es a
@@ -424,35 +534,33 @@ send eff = Eff $ const $ lift $ inj eff
 raise :: Eff lb ub es a -> Eff lb ub (eff : es) a
 raise (Eff act) = Eff \facts -> case act facts of
   Pure a -> Pure a
-  Impure eff lb ub lifter next -> Impure
-    (raiseUnion eff)
-    lb
-    ub
-    ( \case
-        Deeper member -> lifter member
-        -- Why is this impossible? When we raise a value, we know for certain
-        -- that it's unused by the computation that's getting raised. That
-        -- means any effects must be referencing something deeper. I think the
-        -- problem comes from `:>` being an overlapping class. Imagine we
-        -- tried to raise an effect that was already on the stack. All of the
-        -- `:>` proofs would use the recursive case to refer down to the
-        -- original effect skipping over the newly added one thanks to the
-        -- incoherent instance. Although we know that's what will happen, the
-        -- compiler fears that it'll see a `:>` that doesn't skip the
-        -- outermost effect. It can't reason between the function that
-        -- generates the constraints and the function that uses them. This is
-        -- where `IsMember` comes in. It turns the constraint into a datatype.
-        -- Whereas the compiler will throw a compiler error when it has to do
-        -- this branch, using a datatype allows us to defer the error. It is
-        -- quite unsatisfying that we can't express this to the compiler.
-        -- I wonder if there's some machinery we can use that doesn't make
-        -- everything gross?
-        IsMember _ -> error "Impossible Member constraint. Raise used the new eff"
-    )
-    $ \implies -> \case
-      {- HLINT ignore "Avoid lambda" -}
-      Just (Deeper member) -> \x -> cfMap idImply implies raise $ next implies (Just member) x
-      _ -> \x -> cfMap idImply implies raise $ next implies Nothing x
+  Impure eff lb ub lifter next ->
+    Impure
+      (raiseUnion eff)
+      lb
+      ub
+      ( \case
+          Deeper member -> lifter member
+          -- Why is this impossible? When we raise a value, we know for certain
+          -- that it's unused by the computation that's getting raised. That
+          -- means any effects must be referencing something deeper. I think the
+          -- problem comes from `:>` being an overlapping class. Imagine we
+          -- tried to raise an effect that was already on the stack. All of the
+          -- `:>` proofs would use the recursive case to refer down to the
+          -- original effect skipping over the newly added one thanks to the
+          -- incoherent instance. Although we know that's what will happen, the
+          -- compiler fears that it'll see a `:>` that doesn't skip the
+          -- outermost effect. It can't reason between the function that
+          -- generates the constraints and the function that uses them. This is
+          -- where `IsMember` comes in. It turns the constraint into a datatype.
+          -- Whereas the compiler will throw a compiler error when it has to do
+          -- this branch, using a datatype allows us to defer the error. It is
+          -- quite unsatisfying that we can't express this to the compiler.
+          -- I wonder if there's some machinery we can use that doesn't make
+          -- everything gross?
+          IsMember _ -> Nothing
+      )
+      $ CfRaise next
  where
   raiseUnion :: Union es (Eff lb ub esSend) x -> Union (eff : es) (Eff lb ub esSend) x
   raiseUnion (This eff) = That (This eff)
@@ -464,12 +572,9 @@ raise (Eff act) = Eff \facts -> case act facts of
 raiseUnder :: forall e eff lb ub es a. Eff lb ub (eff : es) a -> Eff lb ub (eff : e : es) a
 raiseUnder (Eff act) = Eff \facts -> case act facts of
   Pure a -> pure a
-  Impure @_ @_ @_ @esSend eff lb ub lifter next -> Impure (raiseUnderUnion eff) lb ub lifter' \implies -> \case
-    Just (IsMember _) -> cfMap idImply implies raiseUnder . next implies (Just getProof)
-    Just (Deeper (Deeper proof)) -> \x -> cfMap idImply implies raiseUnder $ next implies (Just $ Deeper proof) x
-    _ -> \x -> cfMap idImply implies raiseUnder $ next implies Nothing x
+  Impure @_ @_ @_ @esSend eff lb ub lifter next -> Impure (raiseUnderUnion eff) lb ub lifter' $ CfRaiseUnder next
    where
-    lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> someEff `IsMember` esSend)
+    lifter' :: (forall someEff. someEff `IsMember` (eff : e : es) -> Maybe (someEff `IsMember` esSend))
     lifter' l =
       case l of
         IsMember _ -> lifter getProof
@@ -479,8 +584,10 @@ raiseUnder (Eff act) = Eff \facts -> case act facts of
         -- try to send it to the sender, that will fail. This makes sense because
         -- the private effect is only in es, not esSend. Both private effects and
         -- the `lifter` are so useful that I'm willing to let it slide.
-        Deeper (IsMember _) -> error "In higher order effects, private effects cannot be run by the sender."
+        Deeper (IsMember _) -> Nothing
 
 raiseUnderUnion :: Union (eff : es) (Eff lbSend ubSend esSend) x -> Union (eff : e : es) (Eff lbSend ubSend esSend) x
 raiseUnderUnion (This eff) = This eff
 raiseUnderUnion (That rest) = That $ That rest
+
+type Lifter es esSend = forall eff. eff `IsMember` es -> Maybe (eff `IsMember` esSend)
