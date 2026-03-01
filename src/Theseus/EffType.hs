@@ -1,5 +1,3 @@
-{-# LANGUAGE DeepSubsumption #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 
 module Theseus.EffType where
@@ -35,9 +33,9 @@ import Theseus.Union
 --
 -- One really cool property of this `Freer` is how the `f` never needs to
 -- change until it's ready to be interpreted. We drop the `f` into the `Impure`
--- constructor, and until we're ready to interpret the value stays the same.
+-- constructor, and, until we're ready to interpret, the value stays the same.
 -- This is different from the `Free` monad where every `bind` operation means
--- calling `map` on the `f` to change it. Not having to change `f` before
+-- calling `map` on `f`. Not having to change `f` before
 -- interpretation is cool because it means we make fewer assumptions about
 -- `f`'s structure. At interpretation time we know exactly what `f` is, so it's
 -- easy to manipulate. During operations like `bind`, we don't know exactly
@@ -74,7 +72,7 @@ import Theseus.Union
 -- back, but it makes things awkward in a different way. One of the cool things
 -- about `Freer` compared to `Free` was how we avoided calling `map` on the
 -- `f`s. Now we've kind of added that back by requiring all our `f`s be
--- HFunctors.
+-- `HFunctor`s.
 --
 -- If `Freer` gets around the `map` problem by introducing a continuation and an
 -- existential variable, can we do something similar to get around the `hmap`
@@ -150,38 +148,38 @@ import Theseus.Union
 --
 -- The `CF` type gives us enough information to implement things like
 -- `runThrow`, `runCoroutine`, and `runChoice` without dropping or duplicating
--- code that frees resources.
+-- code that frees resources. Consumers of `CF` might represent a single thread
+-- of computation, multiple threads of computation, a paused computation, an
+-- aborted computation, a computation that needs to do some other computations
+-- on the side, etc. Some of these let you move beyond scoped effects.
+-- Consumers look like catamorphisms/folds.
 --
--- Consumers of `CF` might represent a single thread of computation, multiple
--- threads of computation, a paused computation, an aborted computation,
--- a computation that needs to do some other computations on the side, etc.
--- Some of these let you move beyond scoped effects. Consumers look like
--- catamorphisms/folds.
---
--- The first two operations in `CF` allow you to add more computations to the
--- flow. The interpreter decides whether to duplicate those between multiple
--- threads, drop them, or something else. Those operations are required for
--- `Freer` to be a Monad and Applicative.
+-- The first constructor for `CF` is the base case for our tree-like structure.
+-- It tells us that the Control Flow simply returns its input. The second
+-- allows you to add more computations to the flow. The interpreter decides
+-- whether to duplicate those between multiple threads, drop them, or something
+-- else.
 --
 -- The last constructor is the really tricky one. Unfortunately the type
 -- signature above is far too restrictive for a lot of useful
--- `interpretations`s. For example, imagine an interpreter or catch which
+-- interpretations. For example, imagine an interpreter for catch which
 -- ignores all the catch blocks and simply returns `Nothing` if anything
 -- throws. Although it might sound simpler than the normal `Catch`
 -- interpretation, it's actually much trickier. It represents control flow that
--- has at most one running thread.  We need the fold to give us an `Freer
--- es (Maybe a)`. When we try to handle `CfRun`, we'll be stuck with a `Freer
--- es (wrap (Maybe a))`. If the `wrap` is completely opaque, there's no way we
--- can get it back into the correct `Freer es (Maybe (wrap a))` shape.
+-- has at most one running thread.  We need the fold to give us a `Freer es
+-- (Maybe a)`. When we try to handle `CfRun` though, we'll be stuck with
+-- a `Freer es (wrap (Maybe a))`. If the `wrap` is completely opaque, there's
+-- no way we can get it back into the correct `Freer es (Maybe (wrap a))`
+-- shape.
 --
 -- The solution Theseus adopts is to put restrictions on `wrap`. For our weird
 -- catch, it's good enough for `wrap` to implement `Traversable`. That means we
--- can turn a `wrap (Maybe a)` into a `Maybe (wrap a)`. It turns out though
--- that some `wrap`s (like the one returned by a `Coroutine` interpreter) don't
--- implement `Traversable`. To support both `ControlFlow`s that require
--- `Traversable` and interpreters which use values that don't, Theseus makes
--- the constraint on `wrap` flexible. When you're looking at the real
--- implementations, that's what all the `lb` and `ub` variables are for.
+-- can turn a `wrap (Maybe a)` into a `Maybe (wrap a)` using `sequence`. It
+-- turns out though that some `wrap`s (like the one returned by a `Coroutine`
+-- interpreter) don't implement `Traversable`. To support both `ControlFlow`s
+-- that require `Traversable` and interpreters which use values that don't,
+-- Theseus makes the constraint on `wrap` flexible. When you're looking at the
+-- real implementations, that's what all the `lb` and `ub` variables are for.
 --
 -- When you reach the real `CF` type, you'll see much more than the
 -- 3 constructors I shared above. Some of them are there to support things like
@@ -211,7 +209,7 @@ type Bound = (Type -> Type) -> Constraint
 -- Why? Interpreters want to rely on the fact that the upper bound implies the
 -- lower bound. Since `lb` and `ub` are usually type variables, every single
 -- function working with `Eff` would need to add or pass around proof that `ub`
--- implies `lb`. To avoid of that noise, we use a `Reader` pattern. You can
+-- implies `lb`. To avoid all that noise, we use a `Reader` pattern. You can
 -- construct a nonsense type like `Eff Show Read ...`, but you can't run it.
 --
 -- I might try adding other useful pieces of information to the `Facts` object.
@@ -234,13 +232,14 @@ effUn = flip unEff
 
 -- | A higher order Freer Monad that keeps track of some extra stuff. The type
 -- parameters match `Eff`. Usually, a `Freer` type would have just two type
--- parameters and look like `Freer f a` where `f` is some kind of open union
--- type. Instead I hardcode this to use an open union because that simplified
--- some of the other bits.
+-- parameters and look like `Freer f a`. Then somewere else you make `f` into
+-- some concrete open union type. Instead I hardcode this to use an open union
+-- because that simplified some of the other bits. The extensible effects paper
+-- also hardcodes, so I think that's fine.
 data Freer :: Bound -> Bound -> [Effect] -> Type -> Type where
   -- | Pure simply holds a value. You can think of Theseus as transforming
-  -- `Impures` over and over again until all that's left is a pure value. Once
-  -- a Freer is a pure value, it will no longer be run. This fact allows
+  -- `Impures` over and over again until all that's left is a `Pure` value.
+  -- Once a Freer is a `Pure` value, it will no longer be run. This fact allows
   -- finalizers to exist.
   Pure :: a -> Freer lb ub es a
   -- | Impure holds an effect that needs to be run before the program can
@@ -262,12 +261,12 @@ data Freer :: Bound -> Bound -> [Effect] -> Type -> Type where
     -- run. The second proves that the upper bound has only gotten higher as
     -- the program has run. Together they prove that our bounding constraints
     -- have not contracted. With these proofs, interpreters can know that their
-    -- type changes are valid, and that other interpreters will use valid type
-    -- changes. The third parameter is a proof that effects that are in scope
-    -- when the state is being interpreted are in scope when the effect is
-    -- being sent. It's convenient when writing interpreters and intuitively
-    -- makes sense even if it's sometimes not true. All effects that haven't
-    -- been raised will remain in scope.
+    -- return type changes are valid, and that other interpreters will use
+    -- valid return type changes. The third parameter is a proof that effects
+    -- that are in scope when the state is being interpreted are in scope when
+    -- the effect is being sent. It's convenient when writing interpreters and
+    -- intuitively makes sense even if it's sometimes not true. All effects
+    -- that haven't been raised will remain in scope.
     lbSend `Implies` lb ->
     ub `Implies` ubSend ->
     (forall eff. eff `IsMember` es -> Maybe (eff `IsMember` esSend)) ->
@@ -326,7 +325,7 @@ data CF input f a where
   -- fmap operations running one after another. We can detect that and turn
   -- them into plain function compositions which GHC optimizes extremely well.
   -- In one realistic benchmark, this changes the amount of memory that has to
-  -- be allocated by an order of magnitude.
+  -- be allocated by orders of magnitude.
   CfFmap :: (a -> b) -> CF input f a -> CF input f b
   CfApply :: CF input f (a -> b) -> f a -> CF input f b
   CfBind :: CF input f a -> (a -> f b) -> CF input f b
@@ -406,9 +405,9 @@ data CF input f a where
   -- Sometimes while handling `CfOnce`, you realize you need to inject your own
   -- `CF` handling code while another handler is running. While I feel like
   -- `CfOnce` behaves reasonably, this one is much more awkward and destroys
-  -- information about the running threads. It hasn't come up in practice, but
-  -- I would like to find improvements. The problematic handlers are in the
-  -- Choice and Error modules.
+  -- information about the running threads. That problem hasn't come up in
+  -- practice yet, but I would like to find improvements. The problematic
+  -- handlers are in the Choice and Error modules.
   CfPutMeIn ::
     (forall a. Monoid (k a)) =>
     (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
