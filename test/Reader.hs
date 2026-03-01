@@ -15,6 +15,8 @@ testReader = do
     describe "Local" do
       it "modifies the original value" do
         "test local" === runEff $ runReader "test" do local (++ " local") ask
+      it "is lexically scoped" do
+        "initial" === runEff $ runReader "initial" $ runA $ local (const "local") $ send A
       it "modifies the original value multiple times" do
         ("test local", "test local") === runEff $ runReader "test" do
           local (++ " local") $ liftA2 (,) ask ask
@@ -54,3 +56,22 @@ testReader = do
             third <- local (++ " never") ask
             pure (first, second, third)
           runReaderNoLocal "second" $ doneCoroutine rest
+
+data A :: Effect where
+  A :: A m String
+
+runA :: (Reader String :> es, lb Identity) => Eff lb ub (A : es) a -> Eff lb ub es a
+runA = interpret_ \A -> ask
+
+-- | This is a version of Reader which completely ignores the function passed
+-- to local. It's unlawful and you should never use it, but it's convenient
+-- for some `Coroutine` tests.
+runReaderNoLocal :: lb Identity => r -> Eff lb ub (Reader r : es) a -> Eff lb ub es a
+runReaderNoLocal @_ @r r = interpret \sender -> \case
+  Ask -> pure $ pure r
+  Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)
+
+locallyRunReaderNoLocal :: (Reader r :> es, lb Identity) => Eff lb ub (Reader r : es) a -> Eff lb ub es a
+locallyRunReaderNoLocal @r = interpret \sender -> \case
+  Ask -> pure <$> ask
+  Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)

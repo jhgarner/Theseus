@@ -130,84 +130,78 @@ import Theseus.Union
 -- is bad and many people pick resource management. Although orthogonal to
 -- higher order effects, Theseus tries to fix this problem too.
 --
--- Theseus introduces a `ControlFlow` types and requires that the continuation
--- in `freer` be called exactly once.
+-- Theseus solves this by making the continuation inspectable using a `CF`
+-- (short for Control Flow) type. Instead of storing a function, we store
+-- a `CF` that tracks all the ways the function would have been manipulated.
+-- Theseus then requires that `CF` be used linearly by all interpreters.
+-- A simplified version looks like the following.
 --
 -- ```haskell
 -- data T3Freer f a where
 --  Pure :: a -> T3Freer f a
---  Impure :: f (T3Freer g) x -> (forall cf. ControlFlow cf => cf (T3Freer g) x -> cf (T3Freer f) a) -> T3Freer f a
+--  Impure :: f (T3Freer g) x -> (Cf (T3Freer g x) (T3Freer f) a) -> T3Freer f a
+--
+-- data CF input f a where
+--  CfIn :: CF (f a) f a
+--  CfBind :: CF input f x -> (x -> f a) -> CF input f a
+--  CfRun :: (forall x. f x -> g (wrap x)) -> CF input f a -> CF input g (wrap a) -> CF input f (wrap a)
+--  ...
 -- ```
 --
--- This may seem like a regression. What about the algebraic effects like
--- `Throw` or `Choice`? That's where the `cf` type comes in. The `cf` type
--- turns the control flow of our computation into manipulatable data. The
--- `ControlFlow` class gives `cf` enough information to implement things like
+-- The `CF` type gives us enough information to implement things like
 -- `runThrow`, `runCoroutine`, and `runChoice` without dropping or duplicating
--- code that frees resources. Removing all the junk, the `ControlFlow` class
--- could look like
+-- code that frees resources.
 --
--- ```haskell
--- class ControlFlow cf where
---   cfApply :: Applicative f => cf f (a -> b) -> f a -> cf f b
---   cfBind :: Monad f => cf f a -> (a -> f b) -> cf f b
---   cfRun ::
---     -- This interpreter function must be called exactly once
---     (forall x. f x -> g (wrap x)) ->
---     cf f a ->
---     cf g (wrap a)
--- ```
+-- Consumers of `CF` might represent a single thread of computation, multiple
+-- threads of computation, a paused computation, an aborted computation,
+-- a computation that needs to do some other computations on the side, etc.
+-- Some of these let you move beyond scoped effects. Consumers look like
+-- catamorphisms/folds.
 --
--- Concrete control flows might represent a single thread of computation,
--- multiple threads of computation, a paused computation, an aborted
--- computation, a computation that needs to do some other computations on the
--- side, etc. Some of these let you move beyond scoped effects.
---
--- The first two operations in `ControlFlow` allow you to add more computations
--- to the flow. The `cf` decides whether to duplicate those between multiple
+-- The first two operations in `CF` allow you to add more computations to the
+-- flow. The interpreter decides whether to duplicate those between multiple
 -- threads, drop them, or something else. Those operations are required for
 -- `Freer` to be a Monad and Applicative.
 --
--- The last operation is the really tricky one. Unfortunately the type
--- signature above is far too restrictive for a lot of useful `ControlFlow`s.
--- For example, imagine a `cf` like `newtype MaybeCf f a = MaybeCf (f (Maybe
--- a))`. This represents control flow that has no more than one thread running.
--- When we apply the interpreter given to `cfRun` to the operation in
--- `MaybeCf`, we get an `f (wrap (Maybe a))`. That type can't be used to
--- construct the new `MaybeCf`.
+-- The last constructor is the really tricky one. Unfortunately the type
+-- signature above is far too restrictive for a lot of useful
+-- `interpretations`s. For example, imagine an interpreter or catch which
+-- ignores all the catch blocks and simply returns `Nothing` if anything
+-- throws. Although it might sound simpler than the normal `Catch`
+-- interpretation, it's actually much trickier. It represents control flow that
+-- has at most one running thread.  We need the fold to give us an `Freer
+-- es (Maybe a)`. When we try to handle `CfRun`, we'll be stuck with a `Freer
+-- es (wrap (Maybe a))`. If the `wrap` is completely opaque, there's no way we
+-- can get it back into the correct `Freer es (Maybe (wrap a))` shape.
 --
--- The solution Theseus adopts is to put restrictions on `wrap`. For `MaybeCf`,
--- it's good enough for `wrap` to implement `Traversable`. That means we can
--- turn a `wrap (Maybe a)` into a `Maybe (wrap a)`. It turns out though that
--- some `wrap`s (like the one returned by a `Coroutine` interpreter) don't
+-- The solution Theseus adopts is to put restrictions on `wrap`. For our weird
+-- catch, it's good enough for `wrap` to implement `Traversable`. That means we
+-- can turn a `wrap (Maybe a)` into a `Maybe (wrap a)`. It turns out though
+-- that some `wrap`s (like the one returned by a `Coroutine` interpreter) don't
 -- implement `Traversable`. To support both `ControlFlow`s that require
 -- `Traversable` and interpreters which use values that don't, Theseus makes
 -- the constraint on `wrap` flexible. When you're looking at the real
--- implementations, that's what all the `ef` and `r` variables are for.
+-- implementations, that's what all the `lb` and `ub` variables are for.
 --
--- Honestly, `ControlFlow` feels adhoc in a way that's confusing and
--- unsatisfying. When we get to the real `Freer` monad and `ControlFlow` types
--- that Theseus uses, it'll look more complicated than the one above. Mostly
--- that's for "boring" adhoc reasons. Things didn't work with the simpler
--- versions, so I added whatever was needed to make them work. I'll try to call
--- those out as we get to them. That makes it hard to understand without
--- following a very long journey through bugs and compiler errors. It would be
--- cool if there were something simpler or more fundamental hiding beneath the
--- surface.
---
---
+-- When you reach the real `CF` type, you'll see much more than the
+-- 3 constructors I shared above. Some of them are there to support things like
+-- `raise` and others are there to help interpreters remain linear. The real
+-- `Freer` type is also more complicated mostly because of those `lb` and `ub`
+-- variables. Hopefully this background helps you understand the more
+-- complicated bits. I'm always welcome to ideas about how things can be
+-- simplified or normalized!
 
 -- ## The gnarly details
 
--- | This is the kind of the `ef` and `r` type variables that you see around.
+-- | This is the kind of the `lb` and `ub` type variables that you will see around.
 -- It's a constraint on how other interpreters can manipulate return types.
 -- `Anything` and `Traversable` are common. `Anything` means that other
 -- interpreters can modify the return type any way they want. `Traversable`
--- means other interpreters must keep the return type accessible, although they
--- may change how many of something there are. It might be interesting to try
--- other classes like `Functor` or a theoretical `LinearTraversable`. They
--- haven't come up yet though.
-type Out = (Type -> Type) -> Constraint
+-- means other interpreters must keep the return type accessible, but they may
+-- change how many of something there are. It might be interesting to try other
+-- classes like `Functor` or a theoretical `LinearTraversable`. They haven't
+-- been needed yet though.
+type Bound = (Type -> Type) -> Constraint
 
 -- | An effectful computation. The third type variable stores a list of
 -- effects that are valid within the computation. This is common across many
@@ -217,12 +211,12 @@ type Out = (Type -> Type) -> Constraint
 -- Why? Interpreters want to rely on the fact that the upper bound implies the
 -- lower bound. Since `lb` and `ub` are usually type variables, every single
 -- function working with `Eff` would need to add or pass around proof that `ub`
--- implies `lb`. To get rid of that noise, we use a `Reader` pattern. You can
+-- implies `lb`. To avoid of that noise, we use a `Reader` pattern. You can
 -- construct a nonsense type like `Eff Show Read ...`, but you can't run it.
 --
 -- I might try adding other useful pieces of information to the `Facts` object.
 -- For example, I could require that `Identity` be valid for all `lb`s.
-newtype Eff (lb :: Out) (ub :: Out) (es :: [Effect]) a
+newtype Eff (lb :: Bound) (ub :: Bound) (es :: [Effect]) a
   = Eff {unEff :: Facts lb ub -> Freer lb ub es a}
   deriving (Functor)
   deriving (Applicative, Monad) via ReaderT (Facts lb ub) (Freer lb ub es)
@@ -240,64 +234,50 @@ effUn = flip unEff
 
 -- | A higher order Freer Monad that keeps track of some extra stuff. The type
 -- parameters match `Eff`. Usually, a `Freer` type would have just two type
--- parameters and look like `Freer f a` where `f` is some kind of open sum
+-- parameters and look like `Freer f a` where `f` is some kind of open union
 -- type. Instead I hardcode this to use an open union because that simplified
 -- some of the other bits.
-data Freer :: Out -> Out -> [Effect] -> Type -> Type where
-  -- | Pure simply holds a value. You can think of this effect system as
-  -- transforming `Impures` over and over again until all that's left is a pure
-  -- value. Once a Freer is a pure value, it will no longer be run. This
-  -- fact allows finalizers to exist.
+data Freer :: Bound -> Bound -> [Effect] -> Type -> Type where
+  -- | Pure simply holds a value. You can think of Theseus as transforming
+  -- `Impures` over and over again until all that's left is a pure value. Once
+  -- a Freer is a pure value, it will no longer be run. This fact allows
+  -- finalizers to exist.
   Pure :: a -> Freer lb ub es a
+  -- | Impure holds an effect that needs to be run before the program can
+  -- continue. It holds both the effect and the rest of the program.
   Impure ::
     -- This is the `f` variable from the intro, but I've hardcoded `f` to
     -- a `Union`. I tried making it generic, but it was kind of unwieldy. The
     -- type variables `efSend`, `esSend`, and `x` are existential and will not
     -- change once an `Impure` is constructed. They represent the state of
-    -- Freer at the time the effect was sent. `es` is not existential. It
+    -- Freer at the time the effect is sent. `es` is not existential. It
     -- represents the state of Freer when the effect is being interpreted. The
     -- value that our computation needs to continue running is of type `x`.
     -- When an effect is first sent, the *send variables will be the same as
-    -- the other variables. That will change as effects are interpreted.
+    -- the other variables. That will change as effects are interpreted,
+    -- raised, etc.
     Union es (Eff lbSend ubSend esSend) x ->
+    -- These three parameters were not in the introduction above. The first
+    -- proves that the lower bound has only gotten lower as the program has
+    -- run. The second proves that the upper bound has only gotten higher as
+    -- the program has run. Together they prove that our bounding constraints
+    -- have not contracted. With these proofs, interpreters can know that their
+    -- type changes are valid, and that other interpreters will use valid type
+    -- changes. The third parameter is a proof that effects that are in scope
+    -- when the state is being interpreted are in scope when the effect is
+    -- being sent. It's convenient when writing interpreters and intuitively
+    -- makes sense even if it's sometimes not true. All effects that haven't
+    -- been raised will remain in scope.
     lbSend `Implies` lb ->
     ub `Implies` ubSend ->
-    -- This parameter was not in the introduction above. It is a proof that any
-    -- effects that are in scope when the state is being interpreted are in
-    -- scope when the effect is being sent. It's convenient when writing
-    -- interpreters and intuitively makes sense even if it's sometimes a lie
-    -- (see the `raise` functions for why it's sometimes a lie).
     (forall eff. eff `IsMember` es -> Maybe (eff `IsMember` esSend)) ->
-    -- Here starts the continuation parameter. This represents the rest of the
-    -- computation. The type variables here are `cf` which stands for control
-    -- flow, `eff` which is the effect we're interpreting, and `r` which is the
-    -- constraint that the control flow puts on other interpreters. These all
-    -- combine to say that the continuation works with any control flow.
-    ( -- Why not just say that `r` (the constraint that our control flow puts
-      -- on return types) and `lb` (the constraint that `Freer` is actually
-      -- tracking) are the same? Imagine we did `runChoice $ runState $ ...`.
-      -- The `runState` uses `Anything` as its constraint. If `r` and `lb` were
-      -- the same, then the result of `runState` would need to be `Eff Anything
-      -- '[Choice] a`. Now we have a problem though because `runChoice`
-      -- requires that the constraint be `Traversable`. We can't safely change
-      -- from a less constrained constraint to a more constrained one, so we
-      -- become stuck. The solution is to instead require that whatever `lb`
-      -- actually is, it's at least as powerful as `r`. Since all types that
-      -- implement `Traversable` also implement `Anything`, `runState` can work
-      -- with an `Eff Traversable ...` just fine. The downside to all this is
-      -- that we get some ambiguous types. Luckily it's not hard to fix those;
-      -- it just requires some explicit types when you call `unrestrict`.
-      -- lb `Implies` r ->
-      -- We pass around an explicit proof of membership. If the type we're
-      -- interpreting (`eff`) is within `es`, this must be `Just`. When would
-      -- `eff` not be in `es`? The `raise` function can cause this. This isn't
-      -- normally included in `freer` types, but it's important if the control
-      -- flow wants to distribute itself across multiple threads.
-      -- Maybe (eff `IsMember` es) ->
-      -- Finally we have the parameter and return type for the continuation
-      -- that we saw in the introduction (although specialized for Freer/Eff).
-      CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a
-    ) ->
+    -- This is the continuation parameter. Instead of using a plain function
+    -- for the continuation, we use a type called `CF` (which stands for
+    -- Control Flow). The `CF` type supports everything the continuation needs
+    -- to do while being easier to inspect.
+    CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
+    -- And that's everything for the Freer type! We can implement the Monad
+    -- hierarchy on it.
     Freer lb ub es a
 
 deriving instance Functor (Freer lb ub es)
@@ -318,130 +298,74 @@ instance Monad (Freer lb ub es) where
   Impure eff lb ub lift (CfBind cfx xma) >>= amb = Impure eff lb ub lift $ CfBind cfx $ xma >=> Eff . const . amb
   Impure eff lb ub lift next >>= fmb = Impure eff lb ub lift $ CfBind next (Eff . const . fmb)
 
--- | This `ControlFlow` class is essential to how Theseus works. When an
--- interpreter wants to resume a computation that paused waiting for a value
--- `a`, it provides the `a`s wrapped in something that implements
--- `ControlFlow`. To be clear, data types that implement ControlFlow are
--- completely different from the data types that represent effects. Many
--- Effects can use the same ControlFlow, and a single Effect can be implemented
--- in different ways using different control flows. The vast majority of
--- Effects will use the Identity ControlFlow which threads around a single
--- computation. Some, like the one used by Choice, will keep track of multiple
--- computations. Others, like those used by the Throw implementations, ignore
--- some of the computations they receieve and store other information alongside
--- the computation.
+-- | `CF` is a representation of part of the program's control flow. `CF` is
+-- like a continuation function, but because we've listed what's allowed to
+-- happen in the continuation, we can inspect and modify it. This allows
+-- interpretors to collaborate with each other without knowing anything about
+-- each other. It's essential to how Theseus can implement finalizers.
 --
--- `ControlFlow` implementations are very close to higher order functors. This
--- class actually started with HFunctor as a superclass. That changed though so
--- that the ControlFlows could be more specialized and make more assumptions
--- about the things they contain.
+-- The most important thing to know about `CF` is that any `CF` must be used
+-- linearly. In addition, most of the functions stored within `CF` must also be
+-- used linearly if they involve `Eff`s. The only exceptions are the `CfApply`
+-- and `CfBind` constructors. The `CF` parameters still must be used linearly,
+-- but the others can be used without restrictions.
 --
--- The `r` parameter is the constraint `cf` puts on `wrap` in `cfRun`. In
--- `Freer`, it's tracked by the `lf` variable. There's a functional dependency
--- between `cf` and `r` because each `cf` picks the constraint it'll depend on.
-class (forall eff f. Functor f => Functor (cf eff f)) => ControlFlow cf r | cf -> r where
-  cfApply :: Applicative f => cf eff f (a -> b) -> f a -> cf eff f b
-  cfBind :: Monad f => cf eff f a -> (a -> f b) -> cf eff f b
-
-  -- This is a slightly weird function that has to do with finalizers. It
-  -- threads continuations through other continuations. This is needed because
-  -- we must call every continuation with something. It's easy to mess that up
-  -- though when you need to run an effect to figure out the value that's
-  -- passed to a continuation. I'm not convinced this is the right way to solve
-  -- the problem, but it's here for now. The parameters are basically the same
-  -- as `Impure` probably because it acts like a strange `bind` operator. The
-  -- function passed to it must be called exactly once.
-  cfOnce ::
-    lbSend `Implies` lb ->
-    Maybe (eff `IsMember` es) ->
-    Lifter es esSend ->
-    ( forall cf eff r.
-      ControlFlow cf r =>
-      lb `Implies` r ->
-      Maybe (eff `IsMember` es) ->
-      cf eff (Eff lbSend ubSend esSend) a ->
-      cf eff (Eff lb ub es) b
-    ) ->
-    cf eff (Eff lb ub es) (Eff lbSend ubSend esSend a) ->
-    cf eff (Eff lb ub es) b
-
-  -- Another weird function that has to do with finalizers which I'm unsure
-  -- about. This allows you to interleave control flows together and is
-  -- required by some of the `cfOnce` implementations. It has some questionable
-  -- properties that I'm not happy with. The function passed to it must be
-  -- called exactly once.
-  cfPutMeIn ::
-    (forall a. Monoid (k a)) =>
-    Maybe (eff `IsMember` es) ->
-    (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
-    cf eff (Eff lb ub es) (Eff lbSend ubSend esSend (k a)) ->
-    cf eff (Eff lb ub es) (k b)
-
-  -- This function wasn't included in the introduction because it's mostly just
-  -- a tool for type tetris. It gives us a way of manipulating the `ef` and
-  -- `es` parameters when we aren't interpreting effects.
-  -- cfMap ::
-  --   ub `Implies` ubSend ->
-  --   lb `Implies` r ->
-  --   (forall x. Eff lbSend ubSend esSend x -> Eff lb ub es x) ->
-  --   cf eff (Eff lbSend ubSend esSend) a ->
-  --   cf eff (Eff lb ub es) a
-  cfRaise ::
-    cf eff (Eff lb ub es) a ->
-    cf eff (Eff lb ub (e : es)) a
-  cfRaiseUnder ::
-    cf eff (Eff lb ub (e : es)) a ->
-    cf eff (Eff lb ub (e : newE : es)) a
-  cfUnrestrict ::
-    lb `Implies` r ->
-    ubSend `Implies` lbSend ->
-    ub `Implies` ubSend ->
-    lbSend `Implies` lb ->
-    cf eff (Eff lbSend ubSend es) a ->
-    cf eff (Eff lb ub es) a
-
-  -- | Another effect's handler needs to be threaded through the control flow.
-  -- The handler will wrap the output in some type constrained by `r`
-  -- (technically constrained by `lb`, but ``lb `Implies` r`` so it's
-  -- constrained by `r` too). The most common `r` is `Anything` because most
-  -- control flows do not care about the result. The next most common is
-  -- `Traversable` so that you can partially inspect whatever is stored within.
-  cfRun ::
-    lb wrap =>
-    Maybe (eff `IsMember` outEs) ->
-    -- | This function must be used linearly. Failing to call it causes
-    -- finalizers to not be run. Calling it more than once causes local
-    -- reasoning to fail. Since I'm not using the Linear Types extension,
-    -- implementors must be careful.
-    (forall x. Eff lb ub es x -> Eff lb ub outEs (wrap x)) ->
-    cf eff (Eff lb ub es) a ->
-    cf eff (Eff lb ub outEs) (wrap a)
-
+-- Almost no users of Theseus will ever see the CF type. That's because novel
+-- control flows are extremely rare. Except for the built in effects, almost
+-- all effects will use the `runLinearCf` function to handle a `CF`. This is
+-- done internally by all but the `interpretRaw` functions. If an effect wants
+-- to throw exceptions or spawn multiple threads, it should almost certainly
+-- rely on the existing effects instead of implementing that itself.
 data CF input f a where
+  -- First the base case. This means there are no control flow operations
+  -- happening and that the input is the same as the output.
   CfIn :: CF (f a) f a
+  -- These express the Monad family of control flow operations. Theseus is very
+  -- unoptomized right now, but one really important optimization is keeping
+  -- the `CfFmap` separate from the others. It's easy to end up with a lot of
+  -- fmap operations running one after another. We can detect that and turn
+  -- them into plain function compositions which GHC optimizes extremely well.
+  -- In one realistic benchmark, this changes the amount of memory that has to
+  -- be allocated by an order of magnitude.
+  CfFmap :: (a -> b) -> CF input f a -> CF input f b
+  CfApply :: CF input f (a -> b) -> f a -> CF input f b
+  CfBind :: CF input f a -> (a -> f b) -> CF input f b
+  -- This runs one of the effects removing it from the stack. The `lb wrap`
+  -- constraint says that the type we're changing the result into implements at
+  -- least the lower bound. Handlers of `CF` will put requirements on `lb`. For
+  -- example, the handler for `Choice` needs to know how to extract the number
+  -- of threads from the wrapped type. `Choice` uses a `Traversable` lower
+  -- bound for that.
+  --
+  -- The second parameter is the interpretation of the effect. It MUST be used
+  -- linearly. If you don't call it, finalizers will not run. If you call it
+  -- too often, finalizers will run too many times. Theseus and Haskell cannot
+  -- detect when you make a mistake, so it's up to handler of `CF` to be
+  -- careful about this. Luckily there's almost no reason to write your own
+  -- `CF` handler, so you can rely on the built in ones to keep the promise.
   CfRun ::
     lb wrap =>
-    -- Maybe (eff `IsMember` es) ->
-
-    -- | This function must be used linearly. Failing to call it causes
-    -- finalizers to not be run. Calling it more than once causes local
-    -- reasoning to fail. Since I'm not using the Linear Types extension,
-    -- implementors must be careful.
     (forall x. Eff lb ub (e : es) x -> Eff lb ub es (wrap x)) ->
     CF input (Eff lb ub (e : es)) a ->
     CF input (Eff lb ub es) (wrap a)
+  -- Almost exactly like `CfRun` except that it interprets an effect that's
+  -- anywhere in the stack instead of an effect that's at the top. Theseus
+  -- tries to avoid this because it makes reasoning about effects harder. It's
+  -- needed for `Choice` because `Choice` has to distribute itself across many
+  -- threads. This makes the handler for `Choice` really complicated and
+  -- creates awkward edges in the semantics if other effects try to distribute
+  -- themselves. Luckily there aren't a lot of good reasons for an effect to
+  -- want to distribute itself like `Choice` does. Those that do should
+  -- probably just use `Choice` as a private dependency.
   CfInterpose ::
     lb wrap =>
-    -- Maybe (eff `IsMember` es) ->
-
-    -- | This function must be used linearly. Failing to call it causes
-    -- finalizers to not be run. Calling it more than once causes local
-    -- reasoning to fail. Since I'm not using the Linear Types extension,
-    -- implementors must be careful.
     (forall x. Eff lb ub es x -> Eff lb ub es (wrap x)) ->
     CF input (Eff lb ub es) a ->
     CF input (Eff lb ub es) (wrap a)
-  CfFmap :: (a -> b) -> CF input f a -> CF input f b
+  -- These operations manipulate the environment in other common ways. Raising
+  -- is helpful when you want to hide an effect from parts of the code.
+  -- Unrestricting is how you massage the lower and upper bound constraints.
+  -- The bounds can only be widened.
   CfRaise ::
     CF input (Eff lb ub es) a ->
     CF input (Eff lb ub (e : es)) a
@@ -454,60 +378,46 @@ data CF input f a where
     lbSend `Implies` lb ->
     CF input (Eff lbSend ubSend es) a ->
     CF input (Eff lb ub es) a
-  CfApply :: CF input f (a -> b) -> f a -> CF input f b
-  CfBind :: CF input f a -> (a -> f b) -> CF input f b
-  CfPutMeIn ::
-    (forall a. Monoid (k a)) =>
-    -- Maybe (eff `IsMember` es) ->
-    (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
-    CF input (Eff lb ub es) (Eff lbSend ubSend esSend (k a)) ->
-    CF input (Eff lb ub es) (k b)
+  -- Remember that every `CF` must be used. A natural thing to try is
+  -- ```haskell
+  -- run :: CF ... -> Eff lb ub es a
+  -- run cf = do
+  --  resumeWith <- someAction
+  --  runLinearCf resumeWith cf
+  -- ```
+  -- But that breaks the linearity promise! The do notation will eventually
+  -- become `CfBind someAction \_ -> runLineraCf resumeWith cf`. Since there
+  -- are no linearity guarantees about how `CfBind`'s second parameter will be
+  -- used, that means there's no guarantee that `cf` will be used linearly.
+  --
+  -- `CfOnce` is how we get around this problem. In specific cases like the one
+  -- in the example, we don't need the full generality of `CfBind`. If the `cf`
+  -- that we need to use linearly lines up correctly with the operation we want
+  -- to perform with its result, we can thread the two together keeping the
+  -- linearity promise. Theseus uses this when there are other effects than
+  -- need to be sent before resuming the computation.
   CfOnce ::
     lbSend `Implies` lb ->
     Lifter es esSend ->
-    ( forall cf eff r.
-      ControlFlow cf r =>
-      lb `Implies` r ->
-      Maybe (eff `IsMember` es) ->
-      cf eff (Eff lbSend ubSend esSend) a ->
-      cf eff (Eff lb ub es) b
-    ) ->
+    CF (Eff lbSend ubSend esSend a) (Eff lb ub es) b ->
     CF input (Eff lb ub es) (Eff lbSend ubSend esSend a) ->
     CF input (Eff lb ub es) b
+  -- This exists to solve the same problem as `CfOnce` but in a different case.
+  -- Sometimes while handling `CfOnce`, you realize you need to inject your own
+  -- `CF` handling code while another handler is running. While I feel like
+  -- `CfOnce` behaves reasonably, this one is much more awkward and destroys
+  -- information about the running threads. It hasn't come up in practice, but
+  -- I would like to find improvements. The problematic handlers are in the
+  -- Choice and Error modules.
+  CfPutMeIn ::
+    (forall a. Monoid (k a)) =>
+    (Eff lbSend ubSend esSend (k a) -> Eff lb ub es (k b)) ->
+    CF input (Eff lb ub es) (Eff lbSend ubSend esSend (k a)) ->
+    CF input (Eff lb ub es) (k b)
 
 instance Functor f => Functor (CF input f) where
   fmap f (CfFmap f' cf) = CfFmap (f . f') cf
   fmap f cf = CfFmap f cf
-
-evalCf ::
-  ControlFlow cf r =>
-  lb `Implies` r ->
-  Maybe (eff `IsMember` es) ->
-  CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
-  cf eff (Eff lbSend ubSend esSend) x ->
-  cf eff (Eff lb ub es) a
-evalCf _ _ CfIn input = input
-evalCf bound member (CfFmap f rest) input = f <$> evalCf bound member rest input
-evalCf bound member (CfApply cfab ma) input = cfApply (evalCf bound member cfab input) ma
-evalCf bound member (CfBind cfma amb) input = cfBind (evalCf bound member cfma input) amb
-evalCf bound member (CfRun handler action) input = cfRun member handler (evalCf bound (fmap Deeper member) action input)
-evalCf bound member (CfInterpose handler action) input = cfRun member handler (evalCf bound member action input)
-evalCf bound member (CfRaise action) input = cfRaise $ evalCf bound (mine member) action input
-evalCf bound member (CfRaiseUnder action) input = cfRaiseUnder $ evalCf bound (mineUnder member) action input
-evalCf bound member (CfUnrestrict bounded ub lb action) input = cfUnrestrict bound bounded ub lb $ evalCf (transImply lb bound) member action input
-evalCf bound member (CfPutMeIn run action) input = cfPutMeIn member run $ evalCf bound member action input
-evalCf bound member (CfOnce lb lifter run action) input = cfOnce lb member lifter run $ evalCf bound member action input
-
-mine :: Maybe (eff `IsMember` (e : es)) -> Maybe (eff `IsMember` es)
-mine Nothing = Nothing
-mine (Just (IsMember _)) = Nothing
-mine (Just (Deeper rest)) = Just rest
-
-mineUnder :: Maybe (eff `IsMember` (e : eNew : es)) -> Maybe (eff `IsMember` (e : es))
-mineUnder Nothing = Nothing
-mineUnder (Just (IsMember _)) = Just getProof
-mineUnder (Just (Deeper (IsMember _))) = Nothing
-mineUnder (Just (Deeper (Deeper rest))) = Just $ Deeper rest
 
 -- ## Freer Manipulators
 
@@ -541,23 +451,6 @@ raise (Eff act) = Eff \facts -> case act facts of
       ub
       ( \case
           Deeper member -> lifter member
-          -- Why is this impossible? When we raise a value, we know for certain
-          -- that it's unused by the computation that's getting raised. That
-          -- means any effects must be referencing something deeper. I think the
-          -- problem comes from `:>` being an overlapping class. Imagine we
-          -- tried to raise an effect that was already on the stack. All of the
-          -- `:>` proofs would use the recursive case to refer down to the
-          -- original effect skipping over the newly added one thanks to the
-          -- incoherent instance. Although we know that's what will happen, the
-          -- compiler fears that it'll see a `:>` that doesn't skip the
-          -- outermost effect. It can't reason between the function that
-          -- generates the constraints and the function that uses them. This is
-          -- where `IsMember` comes in. It turns the constraint into a datatype.
-          -- Whereas the compiler will throw a compiler error when it has to do
-          -- this branch, using a datatype allows us to defer the error. It is
-          -- quite unsatisfying that we can't express this to the compiler.
-          -- I wonder if there's some machinery we can use that doesn't make
-          -- everything gross?
           IsMember _ -> Nothing
       )
       $ CfRaise next
@@ -579,11 +472,6 @@ raiseUnder (Eff act) = Eff \facts -> case act facts of
       case l of
         IsMember _ -> lifter getProof
         Deeper (Deeper proof) -> lifter $ Deeper proof
-        -- The `raiseUnder` function is a bit different from `raise` in that it's
-        -- easy to trigger this runtime error. If you create a private effect and
-        -- try to send it to the sender, that will fail. This makes sense because
-        -- the private effect is only in es, not esSend. Both private effects and
-        -- the `lifter` are so useful that I'm willing to let it slide.
         Deeper (IsMember _) -> Nothing
 
 raiseUnderUnion :: Union (eff : es) (Eff lbSend ubSend esSend) x -> Union (eff : e : es) (Eff lbSend ubSend esSend) x

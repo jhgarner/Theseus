@@ -9,6 +9,8 @@ module Theseus.Union (
   prj,
   IsMember (IsMember, Deeper),
   withProof,
+  dig,
+  digUnder,
 ) where
 
 import Data.Kind (Constraint, Type)
@@ -55,25 +57,32 @@ class InternalMember eff es => eff :> es where
   inj :: eff m a -> Union es m a
   getProof :: eff `IsMember` es
 
-data IsMember eff es where
-  IsMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
-  Deeper :: eff `IsMember` es -> IsMember eff (other : es)
-
--- data MaybeMember eff es where
---   JustMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
---   NothingMember :: eff `IsMember` es -> IsMember eff (other : es)
-
-withProof :: IsMember eff es -> (eff :> es => x) -> x
-withProof (IsMember f) x = f x
-withProof (Deeper more) x = withProof more x
-
-prj :: InternalMember eff ls => Union ls m a -> Maybe (eff m a)
-prj = internalPrj
-
 instance InternalMember eff es => eff :> es where
   inj = internalInj
   getProof = internalGetProof
 
+prj :: InternalMember eff ls => Union ls m a -> Maybe (eff m a)
+prj = internalPrj
+
 type family (:>>) (effs :: [Effect]) (es :: [Effect]) :: Constraint where
   '[] :>> _ = ()
   (a : as) :>> es = (a :> es, as :>> es)
+
+data IsMember eff es where
+  IsMember :: (forall x. (eff :> (eff : es) => x) -> x) -> IsMember eff (eff : es)
+  Deeper :: eff `IsMember` es -> IsMember eff (other : es)
+
+dig :: Maybe (eff `IsMember` (e : es)) -> Maybe (eff `IsMember` es)
+dig Nothing = Nothing
+dig (Just (IsMember _)) = Nothing
+dig (Just (Deeper rest)) = Just rest
+
+digUnder :: Maybe (eff `IsMember` (e : eNew : es)) -> Maybe (eff `IsMember` (e : es))
+digUnder Nothing = Nothing
+digUnder (Just (IsMember _)) = Just getProof
+digUnder (Just (Deeper (IsMember _))) = Nothing
+digUnder (Just (Deeper (Deeper rest))) = Just $ Deeper rest
+
+withProof :: IsMember eff es -> (eff :> es => x) -> x
+withProof (IsMember f) x = f x
+withProof (Deeper more) x = withProof more x

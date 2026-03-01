@@ -1,4 +1,3 @@
-{-# LANGUAGE QuantifiedConstraints #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Theseus.Effect.Choice (
@@ -13,6 +12,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Identity
 import Data.Foldable
+import Data.Functor
 import Theseus.Constraints
 import Theseus.Eff
 
@@ -22,86 +22,68 @@ import Theseus.Eff
 -- but it requires complicated control flow and changes the output. Take a look
 -- at Error first to understand the control flow operations.
 
--- | This is the `ControlFlow` that `Choice` will use. There's the `Thrown`
--- control flow that handles 0 threads of computation, `IdentityCf` that
--- handles 1, and `MaybeCf` that handles 0 or 1. `Many` handles 0 or more
--- threads of computation.
-data Many eff m a where
-  -- So the way `Many` works is it collects computations, but waits to dispatch
-  -- them to multiple "threads" (I'm using threads in a vague sense. It does
-  -- not actually run multiple Haskell or CPU threads). When another
-  -- interpreter needs to run, it runs all the threads independently, joins
-  -- them together, then hands the result to to interpreter. To run all the
-  -- threads separately, it needs to be able to intercept the `Choice`
-  -- operations so they go to thread specific handlers. That means running the
-  -- `Choice` interpreter while interpreting other stuff.
-  Many ::
-    -- While running the `ControlFlow`, the `ef` parameter might change. We
-    -- need to track that ef remains compatible with our thread specific
-    -- `Choice` interpreters. To do that we need to make sure lists are still
-    -- valid wrappers and that all the other wrappers will be `Traversable`.
-    {unMany :: [] `IsoSome` ub -> ManyItems lb ub es a} ->
-    Many Choice (Eff lb ub es) a
-
-manyUn :: IsoSome [] ub -> Many Choice (Eff lb ub es) a -> ManyItems lb ub es a
-manyUn = flip unMany
-
+-- | There's a lot to keep track of while handling `Choice`. The first
+-- parameter tells us that all wrapping types will implement `Traversable`. The
+-- second parameter tells us whether the part of the program we're running now
+-- might contain more `Choice` operations. The third stores the current state
+-- of all the threads in our program. The last represents the rest of the
+-- program. We keep it separate so that we don't merge the threads together too
+-- early.
 data ManyItems lb ub es a where
   ManyItems ::
     lb `Implies` Traversable ->
     Maybe (Choice `IsMember` es) ->
-    -- These are the current values across all our threads of computation.
     Eff lb ub es [a] ->
-    -- This is the operation we'd like to run on each thread.
     (a -> Eff lb ub es b) ->
     ManyItems lb ub es b
+
 deriving instance Functor (ManyItems lb ub es)
 
-deriving instance Functor (Many eff m)
+-- There's one of these functions for each of the "simple" constructors for
+-- `CF`. Since the implementations are pretty noisy, keeping them separate
+-- seemed best. That way we can focus on the complicated stuff later.
 
-instance ControlFlow Many Traversable where
-  Many act `cfApply` fa = Many \listIso -> case act listIso of
-    ManyItems travProof member start go -> ManyItems travProof member start ((<*> fa) . go)
-  Many act `cfBind` afb = Many \listIso -> case act listIso of
-    ManyItems travProof member start go -> ManyItems travProof member start (go >=> afb)
-  cfRaise (Many act) = Many \listIso -> case act listIso of
-    ManyItems isTrav member start go -> ManyItems isTrav (fmap Deeper member) (raise start) (raise . go)
-  cfRaiseUnder (Many act) = Many \listIso -> case act listIso of
-    ManyItems isTrav member start go -> ManyItems isTrav deeperMember (raiseUnder start) (raiseUnder . go)
-     where
-      deeperMember = case member of
-        Nothing -> Nothing
-        Just (IsMember _) -> Just getProof
-        Just (Deeper rest) -> Just $ Deeper $ Deeper rest
-  cfUnrestrict bound bounded ub lb (Many act) = Many \listIso -> case act (isoImplying listIso ub) of
-    ManyItems _ member start go -> ManyItems bound member (unrestrict' bounded ub lb start) (unrestrict' bounded ub lb . go)
-  cfOnce @_ @_ @eff implySend member' lifter handler (Many act) = Many \listIso -> case act listIso of
-    many@(ManyItems travProof member _ _) -> ManyItems travProof member newStart pure
-     where
-      implied = transImply implySend travProof
-      newStart = do
-        matchOn (sequenceA <$> runMany listIso member' many) >>= \case
-          Pure as ->
-            case handler travProof member' $ Many $ const $ ManyItems (transImply implySend travProof) (member >>= lifter) as pure of
-              Many act -> runMany listIso member' $ act listIso
-          Impure eff lb ub lifter' next -> Eff \_ ->
-            Impure eff lb ub lifter' $
-              CfPutMeIn (\starts -> runMany listIso member' $ manyUn listIso $ handler @_ @eff travProof member' $ Many \_ -> ManyItems implied (member >>= lifter) starts pure) next
-  cfPutMeIn _ f (Many act) = Many \listIso -> case act listIso of
-    many@(ManyItems travProof member _ _) -> ManyItems travProof member newStart pure
-     where
-      newStart = do
-        matchOn (sequenceA <$> runMany listIso member many) >>= \case
-          -- TODO this is probably bad because I'm flattening the threads.
-          -- I should create some tests to either show why this is fine or show
-          -- why it's bad.
-          Pure as -> fmap pure $ f $ fmap fold as
-          Impure eff lb ub lifter next -> Eff \_ ->
-            Impure eff lb ub lifter $
-              fmap pure $
-                CfPutMeIn f $
-                  fmap fold <$> next
+applyMany :: ManyItems lb ub es (a -> b) -> Eff lb ub es a -> ManyItems lb ub es b
+applyMany (ManyItems lb member start go) ma = ManyItems lb member start \a -> go a <*> ma
 
+bindMany :: ManyItems lb ub es a -> (a -> Eff lb ub es b) -> ManyItems lb ub es b
+bindMany (ManyItems lb member start go) amb = ManyItems lb member start $ go >=> amb
+
+raiseMany :: ManyItems lb ub es a -> ManyItems lb ub (e : es) a
+raiseMany (ManyItems lb member start go) = ManyItems lb (fmap Deeper member) (raise start) (raise . go)
+
+raiseManyUnder :: ManyItems lb ub (e : es) a -> ManyItems lb ub (e : newE : es) a
+raiseManyUnder (ManyItems lb member start go) = ManyItems lb newMember (raiseUnder start) (raiseUnder . go)
+ where
+  newMember =
+    member <&> \case
+      (IsMember _) -> getProof
+      (Deeper rest) -> Deeper $ Deeper rest
+
+unrestrictMany ::
+  lb `Implies` Traversable ->
+  ubSend `Implies` lbSend ->
+  ub `Implies` ubSend ->
+  lbSend `Implies` lb ->
+  ManyItems lbSend ubSend es a ->
+  ManyItems lb ub es a
+unrestrictMany isTrav bounded ub lb (ManyItems _ member start go) = ManyItems isTrav member (unrestrict' bounded ub lb start) (unrestrict' bounded ub lb . go)
+
+runManyCf ::
+  [] `IsoSome` ub ->
+  lb `Implies` Traversable ->
+  Maybe (Choice `IsMember` es) ->
+  ManyItems lbSend ubSend esSend x ->
+  CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
+  ManyItems lb ub es a
+runManyCf canUseList lbIsTrav member many = \case
+  CfIn -> many
+  CfFmap f cf -> f <$> runManyCf canUseList lbIsTrav member many cf
+  CfApply cf ma -> applyMany (runManyCf canUseList lbIsTrav member many cf) ma
+  CfBind cf amb -> bindMany (runManyCf canUseList lbIsTrav member many cf) amb
+  CfRaise cf -> raiseMany $ runManyCf canUseList lbIsTrav (dig member) many cf
+  CfRaiseUnder cf -> raiseManyUnder $ runManyCf canUseList lbIsTrav (digUnder member) many cf
+  CfUnrestrict bounded ub lb cf -> unrestrictMany lbIsTrav bounded ub lb $ runManyCf (isoImplying canUseList ub) (transImply lb lbIsTrav) member many cf
   -- Most `Choice` implementations are depth first. They run one thread to
   -- completion, then they run the next. The problem with depth first is that
   -- it causes things like `State` to constantly go in and out of scope
@@ -111,12 +93,49 @@ instance ControlFlow Many Traversable where
   -- parallel. That means handlers aren't constantly going in and out of scope
   -- because all the threads will join before the interpreter goes out of
   -- scope.
-  cfRun member handler (Many act) = Many \listIso -> case act listIso of
+  --
+  -- What's up with the `newStart` variable? Basically we're doing manual
+  -- type class resolution. We know the wrapper type implements `Traversable`,
+  -- but GHC doesn't understand that. Instead we say that the wrapper type is
+  -- isomorphic to something which does implement `Traversable`. We have to
+  -- convert back and forth with that isomorphism to use the `sequenceA`
+  -- function.
+  CfRun handler cf -> case runManyCf canUseList lbIsTrav (fmap Deeper member) many cf of
     many@(ManyItems imply@(Implies go) member' _ _) -> ManyItems imply member newStart pure
      where
-      -- We require `Traversable` because we need to know how many threads made
-      -- it past the other interpreter.
-      newStart = go \(Iso lr rl) -> fmap (fmap rl . sequenceA . lr) $ handler $ runMany listIso member' many
+      newStart = go \(Iso lr rl) -> fmap (fmap rl . sequenceA . lr) $ handler $ runMany canUseList member' many
+  -- Interpose is the exact same as run.
+  CfInterpose handler cf -> case runManyCf canUseList lbIsTrav member many cf of
+    many@(ManyItems imply@(Implies go) member' _ _) -> ManyItems imply member newStart pure
+     where
+      newStart = go \(Iso lr rl) -> fmap (fmap rl . sequenceA . lr) $ handler $ runMany canUseList member' many
+  -- These next two functions are twisty so that the `CF` will always be used linearly.
+  CfOnce implySend lifter handler cf -> case runManyCf canUseList lbIsTrav member many cf of
+    many@(ManyItems travProof member' _ _) -> ManyItems travProof member newStart pure
+     where
+      implied = transImply implySend travProof
+      newStart = do
+        matchOn (sequenceA <$> runMany canUseList member' many) >>= \case
+          Pure as ->
+            case runManyCf canUseList lbIsTrav member (ManyItems (transImply implySend lbIsTrav) (member >>= lifter) as pure) handler of
+              items -> runMany canUseList member items
+          Impure eff lb ub lifter' next -> Eff \_ ->
+            Impure eff lb ub lifter' $
+              CfPutMeIn (\starts -> runMany canUseList member' $ runManyCf canUseList lbIsTrav member (ManyItems implied (member >>= lifter) starts pure) handler) next
+  CfPutMeIn f cf -> case runManyCf canUseList lbIsTrav member many cf of
+    many@(ManyItems travProof member _ _) -> ManyItems travProof member newStart pure
+     where
+      newStart = do
+        matchOn (sequenceA <$> runMany canUseList member many) >>= \case
+          -- TODO this is probably bad because I'm flattening the threads.
+          -- I should create some tests to either show why this is fine or show
+          -- why it's bad.
+          Pure as -> fmap pure $ f $ fmap fold as
+          Impure eff lb ub lifter next -> Eff \_ ->
+            Impure eff lb ub lifter $
+              fmap pure $
+                CfPutMeIn f $
+                  fmap fold <$> next
 
 -- There we go! That's how Theseus handles nondeterminism while avoiding the
 -- handler ordering problems.
@@ -137,14 +156,14 @@ runChoice ::
   Eff lb ub es [a]
 runChoice act = Eff \facts@Facts{bounded} -> effUn facts $ with act $ interpretRaw (isoImplying isoSomeId bounded) (pure . pure) \cases
   Empty lb _ lifter next ->
-    case manyUn isoSomeId $ evalCf implyAtLeast (Just getProof) next $ Many \_ -> ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure []) pure of
+    case runManyCf isoSomeId implyAtLeast (Just getProof) (ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure []) pure) next of
       ManyItems travProof _ start go ->
         join <$> runChoice do
           inits <- start
           results <- traverse (poseChoice isoSomeId travProof . go) inits
           pure $ join results
   Choose lb _ lifter next ->
-    case manyUn isoSomeId $ evalCf implyAtLeast (Just getProof) next $ Many \_ -> ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure [True, False]) pure of
+    case runManyCf isoSomeId implyAtLeast (Just getProof) (ManyItems (transImply lb implyAtLeast) (lifter getProof) (pure [True, False]) pure) next of
       ManyItems travProof _ start go ->
         join <$> runChoice do
           inits <- start
@@ -163,11 +182,11 @@ poseChoice isoUb imply action = do
   Facts{bounded} <- getFacts
   IsoSome (Iso lg gl) <- pure $ isoImplying isoUb bounded
   fmap gl $ with action $ interposeRaw imply (lg . pure) \cases
-    Empty lb _ sender next ->
-      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (Just $ sender @Choice getProof) (pure []) pure of
+    Empty lb _ lifter next ->
+      case runManyCf isoUb imply (Just getProof) (ManyItems (transImply lb imply) (lifter @Choice getProof) (pure []) pure) next of
         many -> lg <$> runMany isoUb (Just getProof) many
-    Choose lb _ sender next ->
-      case manyUn isoUb $ next $ Many \_ -> ManyItems (transImply lb imply) (Just $ sender @Choice getProof) (pure [True, False]) pure of
+    Choose lb _ lifter next ->
+      case runManyCf isoUb imply (Just getProof) (ManyItems (transImply lb imply) (lifter @Choice getProof) (pure [True, False]) pure) next of
         many -> lg <$> runMany isoUb (Just getProof) many
 
 -- | Executes all the threads

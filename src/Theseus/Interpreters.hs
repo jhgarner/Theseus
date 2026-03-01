@@ -56,13 +56,13 @@ interpret ::
   Handler eff lb ub es ->
   Eff lb ub (eff : es) a ->
   Eff lb ub es a
-interpret @eff f =
+interpret f =
   fmap runIdentity . interpretRaw
     isoSomeId
     (pure . Identity)
     \eff lb _ lifter next ->
       matchOn (f (sendIt lifter) eff) >>= \case
-        Pure a -> fmap Identity $ interpret f $ runIdentityCf $ evalCf implying (Just getProof) next $ IdentityCf @eff a
+        Pure a -> fmap Identity $ interpret f $ runLinearCf a next
         Impure eff lb' ub' lifter' next' ->
           Eff $
             const $
@@ -70,7 +70,7 @@ interpret @eff f =
                 CfOnce
                   lb
                   (lifter . Deeper)
-                  (\implies member' cf -> cfRun member' (fmap Identity . interpret f) $ evalCf implies (fmap Deeper member') next cf)
+                  (CfRun (fmap Identity . interpret f) next)
                   next'
 
 -- | The output is a computation that the sender can run to continue execution.
@@ -95,10 +95,10 @@ interpretW wrap f =
     wrap
     \eff lb _ lifter next -> Eff \facts -> do
       case first (effUn facts) $ f (sendIt lifter) eff of
-        (Pure a, continue) -> effUn facts $ continue $ runIdentityCf $ evalCf implying (Just getProof) next $ IdentityCf @eff a
+        (Pure a, continue) -> effUn facts $ continue $ runLinearCf a next
         (Impure eff lb' ub' lifter' next', continue) ->
           Impure eff lb' ub' lifter' $
-            CfOnce lb (lifter . Deeper) (\implying member' cf -> cfRun member' continue $ evalCf implying (fmap Deeper member') next cf) next'
+            CfOnce lb (lifter . Deeper) (CfRun continue next) next'
 
 -- | The output of the handler is a value to continue with and a way of
 -- interpreting the next effect that's sent. This allows you to keep track of
@@ -207,11 +207,11 @@ type HandlerRaw eff lb ub es wrap =
     Eff lb ub es (wrap a)
   )
 
--- | Read this as
--- `(IsMember e es -> IsMember e esSend) -> Member e es => Member e esSend`. In
--- other words, it turns a `->` into a `=>`. Of course we can't actually
--- express that in Haskell directly so there's a little extra going on. This is
--- related to the `Sender` and looks vaguely like a quantified constraint.
+-- | Read this as `(IsMember e es -> IsMember e esSend) -> Member e es =>
+-- Member e esSend`. In other words, it turns a `->` into a `=>`. Of course we
+-- can't actually express that in Haskell directly so there's a little extra
+-- going on. This is related to the `Sender` and `Lifter` types which look
+-- vaguely like quantified constraints.
 sendIt :: (forall e. e `IsMember` es -> Maybe (e `IsMember` esSend)) -> (forall e. e :> es => (forall y. (e :> esSend => y) -> y))
 sendIt f = withProof (fromMaybe (error "Attempted to send a private effect dependency") $ f getProof)
 
@@ -243,54 +243,57 @@ unrestrict' boundedSend ub' lb' (Eff act) = Eff \_ -> case act $ Facts boundedSe
     Impure eff (transImply lb lb') (transImply ub' ub) lift $
       CfUnrestrict boundedSend ub' lb' continue
 
--- | The simplest control flow. It represents a straight line or a single
--- thread.
-newtype IdentityCf eff f a = IdentityCf {runIdentityCf :: f a}
-  deriving (Functor)
-
-instance ControlFlow IdentityCf Anything where
-  IdentityCf fab `cfApply` fa = IdentityCf $ fab <*> fa
-  IdentityCf fa `cfBind` afb = IdentityCf $ fa >>= afb
-  cfOnce ogLb member lifter handler (IdentityCf @eff fea) = IdentityCf do
-    matchOn fea >>= \case
-      Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
-      Impure eff lb ub lifter' next -> Eff \_ ->
-        Impure eff lb ub lifter' $
-          CfOnce ogLb lifter handler next
-  cfPutMeIn _ f (IdentityCf fka) = IdentityCf do
-    matchOn fka >>= \case
-      Pure a -> f a
+-- | Runs a control flow that only uses a single thread. This is the simple common case.
+runLinearCf ::
+  Eff lbSend ubSend esSend x ->
+  CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
+  Eff lb ub es a
+runLinearCf go = \case
+  CfIn -> go
+  CfFmap ab cfa -> ab <$> runLinearCf go cfa
+  CfApply fab ma -> runLinearCf go fab <*> ma
+  CfBind cfa amb -> runLinearCf go cfa >>= amb
+  CfOnce lb lifter handler cfa ->
+    matchOn (runLinearCf go cfa) >>= \case
+      Pure a -> runLinearCf a handler
+      Impure eff lb' ub lifter' next -> Eff \_ ->
+        Impure eff lb' ub lifter' $
+          CfOnce lb lifter handler next
+  CfPutMeIn handler cfka ->
+    matchOn (runLinearCf go cfka) >>= \case
+      Pure a -> handler a
       Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $ CfPutMeIn f next
-  cfRaise (IdentityCf fa) = IdentityCf $ raise fa
-  cfRaiseUnder (IdentityCf fa) = IdentityCf $ raiseUnder fa
-  cfUnrestrict _ bounded ub lb (IdentityCf fa) = IdentityCf $ unrestrict' bounded ub lb fa
-  cfRun _ handler (IdentityCf fa) = IdentityCf $ handler fa
+        Impure eff lb ub lifter $ CfPutMeIn handler next
+  CfRaise cf -> raise $ runLinearCf go cf
+  CfRaiseUnder cf -> raiseUnder $ runLinearCf go cf
+  CfUnrestrict bounded ub lb cf -> unrestrict' bounded ub lb $ runLinearCf go cf
+  CfRun handler cf -> handler $ runLinearCf go cf
+  CfInterpose handler cf -> handler $ runLinearCf go cf
 
 -- | Replaces one interpretation with another.
 interposeRaw ::
-  (eff :> es, lb wrap, ControlFlow cf r) =>
+  (eff :> es, lb wrap) =>
   lb `Implies` r ->
   (forall x. x -> wrap x) ->
-  IHandlerRaw eff lb ub es cf wrap ->
+  IHandlerRaw eff lb ub es wrap ->
   Eff lb ub es a ->
   Eff lb ub es (wrap a)
 interposeRaw topImply ret f (Eff act) = Eff \facts -> case act facts of
   Pure a -> pure $ ret a
   Impure union lb ub lifter next -> case prj union of
-    Just eff -> effUn facts $ f eff lb ub (sendIt lifter) (evalCf topImply (Just getProof) next)
+    Just eff -> effUn facts $ f eff lb ub lifter next
     Nothing ->
       Impure union lb ub lifter $ CfInterpose (interposeRaw topImply ret f) next
 
 -- | A handler for an interposition.
-type IHandlerRaw eff lb ub es cf wrap =
+type IHandlerRaw eff lb ub es wrap =
   ( forall esSend lbSend ubSend x a.
     eff :> es =>
     eff (Eff lbSend ubSend esSend) x ->
     lbSend `Implies` lb ->
     ub `Implies` ubSend ->
-    Sender es esSend ->
-    (cf eff (Eff lbSend ubSend esSend) x -> cf eff (Eff lb ub es) a) ->
+    Lifter es esSend ->
+    CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
     Eff lb ub es (wrap a)
   )
 
@@ -315,32 +318,35 @@ data Final m f a where
 -- `m` should call the function passed exactly once. The IO module handles the
 -- common case for the `IO` type by getting rid of Exceptions.
 runEffM :: Monad m => Eff Anything Nonthing '[Final m] a -> m a
-runEffM @m =
+runEffM =
   runEff . interpretRaw isoSomeId (pure . pure) \(Final ma) _ _ _ next ->
-    pure $ runEffM =<< getComposeCf (evalCf implying (Just getProof) next $ ComposeCf @m @(Final m) $ fmap pure ma)
+    pure $ runEffM =<< runComposedCf ma next
 
-newtype ComposeCf f eff g a = ComposeCf {getComposeCf :: f (g a)}
-  deriving (Functor)
-
-instance Functor m => ControlFlow (ComposeCf m) Anything where
-  ComposeCf mfab `cfApply` fa = ComposeCf $ fmap (<*> fa) mfab
-  ComposeCf mfa `cfBind` afb = ComposeCf $ fmap (>>= afb) mfa
-  cfOnce ogLb member lifter handler (ComposeCf @_ @eff cf) = ComposeCf do
-    thing <- cf
+-- | Runs a control flow using a Monad to add extra capabilities to the
+-- execution. Like with `runEffM`, it's important that your `m` always use its
+-- `fmap` parameter once.
+runComposedCf :: Functor m => m x -> CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a -> m (Eff lb ub es a)
+runComposedCf go = \case
+  CfIn -> fmap pure go
+  CfFmap ab cfa -> fmap ab <$> runComposedCf go cfa
+  CfApply cfab ma -> (<*> ma) <$> runComposedCf go cfab
+  CfBind cfa amb -> (>>= amb) <$> runComposedCf go cfa
+  CfOnce ogLb lifter handler cf -> do
+    thing <- runComposedCf go cf
     pure do
       matchOn thing >>= \case
-        Pure a -> runIdentityCf $ handler implying member $ IdentityCf @eff a
+        Pure a -> runLinearCf a handler
         Impure eff lb ub lifter' next -> Eff \_ ->
           Impure eff lb ub lifter' $ CfOnce ogLb lifter handler next
-  cfPutMeIn _ f (ComposeCf @_ cf) = ComposeCf do
-    thing <- cf
+  CfPutMeIn handler cf -> do
+    thing <- runComposedCf go cf
     pure do
       matchOn thing >>= \case
-        Pure a -> f a
+        Pure a -> handler a
         Impure eff lb ub lifter next -> Eff \_ ->
-          Impure eff lb ub lifter $ CfPutMeIn f next
-
-  cfRaise (ComposeCf mfa) = ComposeCf $ fmap raise mfa
-  cfRaiseUnder (ComposeCf mfa) = ComposeCf $ fmap raiseUnder mfa
-  cfUnrestrict _ bounded ub lb (ComposeCf mfa) = ComposeCf $ fmap (unrestrict' bounded ub lb) mfa
-  cfRun _ handler (ComposeCf mfa) = ComposeCf $ fmap handler mfa
+          Impure eff lb ub lifter $ CfPutMeIn handler next
+  CfRaise cf -> raise <$> runComposedCf go cf
+  CfRaiseUnder cf -> raiseUnder <$> runComposedCf go cf
+  CfUnrestrict bounded ub lb cf -> unrestrict' bounded ub lb <$> runComposedCf go cf
+  CfRun handler cf -> handler <$> runComposedCf go cf
+  CfInterpose handler cf -> handler <$> runComposedCf go cf

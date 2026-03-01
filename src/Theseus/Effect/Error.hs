@@ -1,5 +1,3 @@
-{-# LANGUAGE QuantifiedConstraints #-}
-
 module Theseus.Effect.Error where
 
 import Control.Applicative (Const (Const, getConst))
@@ -14,15 +12,16 @@ import Theseus.Eff
 
 -- Error is a good example of something with complicated control flow.
 
--- | We separate out the Throw and Catch effects so that you can more easily
--- scope when throwing an exception is allowed.
+-- | We separate out the Throw and Catch effects so that you can easily scope
+-- when throwing an exception is allowed.
 newtype Throw e m a where
   Throw :: e -> Throw e m a
 
 throw :: Throw e :> es => e -> Eff lb ub es a
 throw e = send $ Throw e
 
--- | This is a provider for `Throw` effects.
+-- | This is a provider for `Throw` effects. If you want to change what `Throw`
+-- does, you can change the `Catch` interpreter.
 data Catch m a where
   Catch :: lb (Either e) => Eff lb ub (Throw e : es) a -> (e -> Eff lb ub es a) -> Catch (Eff lb ub es) a
 
@@ -33,48 +32,11 @@ runCatch :: lb Identity => Eff lb ub (Catch : es) a -> Eff lb ub es a
 runCatch = interpret \_ (Catch action onThrow) ->
   pure $ runThrow action >>= either onThrow pure
 
--- | A control flow data type which ignores any attempts to continue the
--- control flow. Instead it keeps track of the value that was thrown and
--- a series of finalizers to run.
-data Thrown e eff f a = Thrown {getThrown :: e, finalizers :: f ()}
-  deriving (Functor)
-
-finishThrown :: Functor f => Thrown e eff f a -> f e
-finishThrown (Thrown e finalizers) = finalizers $> e
-
-instance ControlFlow (Thrown e) Anything where
-  -- Note how it ignores the rhs of these operations. It acts a lot like Const.
-  Thrown e f `cfApply` _ = Thrown e f
-  Thrown e f `cfBind` _ = Thrown e f
-  cfUnrestrict _ bounded ub lb (Thrown e f) = Thrown e $ unrestrict' bounded ub lb f
-  cfRaise (Thrown e f) = Thrown e $ raise f
-  cfRaiseUnder (Thrown e f) = Thrown e $ raiseUnder f
-  cfOnce @_ @_ @eff _ member' _ handler (Thrown e f) = Thrown e do
-    matchOn f >>= \case
-      Pure () -> runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $
-          fmap getConst $
-            CfPutMeIn (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $
-              fmap (\() -> pure $ Const ()) next
-  cfPutMeIn _ f (Thrown e fin) = Thrown e do
-    matchOn fin >>= \case
-      Pure a -> void $ f $ pure a $> mempty
-      Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $
-          void $
-            CfPutMeIn f $
-              fmap (\() -> pure mempty) next
-
-  -- Note that we don't ignore the handler. This is because `cfRun` requires
-  -- that the `handler` parameter be used linearly.
-  cfRun _ handler (Thrown e f) = Thrown e $ handler f $> ()
-
 runThrow :: forall e lb ub es a. lb (Either e) => Eff lb ub (Throw e : es) a -> Eff lb ub es (Either e a)
 -- Although Throw is first order, it modifies the control flow, so we have to
 -- use `interpretRaw`.
 runThrow = interpretRaw isoSomeId (pure . pure) \(Throw e) _ _ _ next ->
-  -- We run the `next` function that was passed into our interpreter. Most
+  -- We consume the `next` function that was passed into our interpreter. Most
   -- other effect systems would simply ignore the continuation. Theseus doesn't
   -- ignore the continuation because we want finalizers to run.
   --
@@ -82,33 +44,55 @@ runThrow = interpretRaw isoSomeId (pure . pure) \(Throw e) _ _ _ next ->
   -- and Theseus didn't have the linearity constraints. After adding those,
   -- I had to add the `takeError` function call. That seemed weird, but really
   -- it's the same problem most languages with try-finally blocks have: what do
-  -- you do when the finalizer throws an exception? Anyway, I think it's cool
+  -- you do when a finalizer throws an exception? Anyway, I think it's cool
   -- that the type system forces us to confront problems like this that are
   -- shared with non-functional non-statically typed languages. Since the
-  -- solutions are shared, the solutions can also be shared. Just like how Java
+  -- problem is shared, the solutions can also be shared. Just like how Java
   -- added the `suppressed` field to its exception types so that the original
   -- exception wouldn't be lost, we could do something similar. For now we just
   -- ignore the original exception.
-  fmap takeError $ runThrow $ finishThrown $ evalCf implying (Just $ getProof @(Throw e)) next $ Thrown e (pure ())
+  fmap (takeError e) $ runThrow $ runEmptyCf (pure ()) next
 
-takeError :: Either e e -> Either e a
-takeError = either Left Left
+takeError :: e -> Either e () -> Either e a
+takeError _ (Left e) = Left e
+takeError e (Right ()) = Left e
 
 -- | Like `runCatch` except it completely ignores the catching block. If
 -- anything throws, the entire computation finishes with `Nothing`.
 runCatchNoRecovery :: (lb Maybe, lb `IsAtLeast` Traversable) => Eff lb ub (Catch : es) a -> Eff lb ub es (Maybe a)
-runCatchNoRecovery = interpretRaw isoSomeId (pure . pure) \(Catch action _) lb _ _ next -> do
-  ran <- runCatchNoRecovery $ runMaybeCf $ evalCf implyAtLeast (Just $ getProof @Catch) next $ MaybeCf (transImply lb implyAtLeast) $ either (const Nothing) Just <$> runThrow action
+runCatchNoRecovery = interpretRaw isoSomeId (pure . pure) \(Catch action _) _ _ _ next -> do
+  ran <- runCatchNoRecovery $ runMaybeCf implyAtLeast (either (const Nothing) Just <$> runThrow action) next
   pure $ join ran
 
-data MaybeCf eff f a where
-  MaybeCf ::
-    {imply :: lb `Implies` Traversable, runMaybeCf :: Eff lb ub es (Maybe a)} ->
-    MaybeCf eff (Eff lb ub es) a
-deriving instance Functor (MaybeCf eff f)
-
-newtype NothingCf eff f a = NothingCf {runNothingCf :: f ()}
-  deriving (Functor)
+-- | This control flow represents a stopped computation. There are no active
+-- threads, but we still have to track the finalizers.
+runEmptyCf :: Eff lbSend ubSend esSend () -> CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a -> Eff lb ub es ()
+runEmptyCf go = \case
+  CfIn -> go
+  CfFmap _ cf -> runEmptyCf go cf
+  CfApply cf _ -> runEmptyCf go cf
+  CfBind cf _ -> runEmptyCf go cf
+  CfOnce _ _ handler cf ->
+    matchOn (runEmptyCf go cf) >>= \case
+      Pure () -> runEmptyCf (pure ()) handler
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          fmap getConst $
+            CfPutMeIn (\ef -> Const <$> runEmptyCf (void ef) handler) $
+              fmap (\() -> pure $ Const ()) next
+  CfPutMeIn f cf -> do
+    matchOn (runEmptyCf go cf) >>= \case
+      Pure () -> void $ f $ pure mempty
+      Impure eff lb ub lifter next -> Eff \_ ->
+        Impure eff lb ub lifter $
+          void $
+            CfPutMeIn f $
+              fmap (\() -> pure mempty) next
+  CfUnrestrict bounded ub lb cf -> unrestrict' bounded ub lb $ runEmptyCf go cf
+  CfRaise cf -> void $ raise $ runEmptyCf go cf
+  CfRaiseUnder cf -> raiseUnder $ runEmptyCf go cf
+  CfRun handler cf -> void $ handler $ runEmptyCf go cf
+  CfInterpose handler cf -> void $ handler $ runEmptyCf go cf
 
 -- This is an example of a control flow that uses Traversable. Why do Control
 -- Flows ever need `Traversable` or really anything more strict than
@@ -139,23 +123,30 @@ newtype NothingCf eff f a = NothingCf {runNothingCf :: f ()}
 -- requires `Comonad` which would conveniently line up with the usual UnliftIO
 -- restrictions. Anyway, at this point I'm probably confusing things, but
 -- I think it's an interesting direction to study.
-instance ControlFlow MaybeCf Traversable where
-  MaybeCf imply fmab `cfApply` fa = MaybeCf imply $ (\mab a -> fmap ($ a) mab) <$> fmab <*> fa
-  MaybeCf imply fma `cfBind` afb = MaybeCf imply $ fma >>= traverse afb
-  cfOnce @_ @_ @eff lb' member' _ handler (MaybeCf imply' f) = MaybeCf imply' do
-    matchOn f >>= \case
-      Pure (Just a) -> fmap Just $ runIdentityCf $ handler implying member' $ IdentityCf a
-      Pure Nothing -> ($> Nothing) $ runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $
+runMaybeCf ::
+  lb `Implies` Traversable ->
+  Eff lbSend ubSend esSend (Maybe x) ->
+  CF (Eff lbSend ubSend esSend x) (Eff lb ub es) a ->
+  Eff lb ub es (Maybe a)
+runMaybeCf lbIsTrav go = \case
+  CfIn -> go
+  CfFmap f cf -> fmap f <$> runMaybeCf lbIsTrav go cf
+  CfApply cfab ma -> (\mab a -> fmap ($ a) mab) <$> runMaybeCf lbIsTrav go cfab <*> ma
+  CfBind cfa amb -> runMaybeCf lbIsTrav go cfa >>= traverse amb
+  CfOnce _ _ handler cf ->
+    matchOn (runMaybeCf lbIsTrav go cf) >>= \case
+      Pure (Just a) -> Just <$> runLinearCf a handler
+      Pure Nothing -> ($> Nothing) $ runEmptyCf (pure ()) handler
+      Impure eff lb' ub lifter next -> Eff \_ ->
+        Impure eff lb' ub lifter $
           -- TODO This is weird because it acts as a funnel converting all the
           -- other threads of computation into a single one. That's probably
           -- going to be confusing. Maybe everything should be lists?
           fmap getFirst $
-            CfPutMeIn (fmap First . runMaybeCf . handler @_ @eff imply' member' . MaybeCf (transImply lb' imply') . fmap getFirst) $
+            CfPutMeIn (\ef -> First <$> runMaybeCf lbIsTrav (fmap getFirst ef) handler) $
               sequenceA . First <$> next
-  cfPutMeIn _ f (MaybeCf imply' fin) = MaybeCf imply' do
-    matchOn fin >>= \case
+  CfPutMeIn f cf ->
+    matchOn (runMaybeCf lbIsTrav go cf) >>= \case
       Pure (Just a) -> Just <$> f a
       -- TODO Wow this is also weird. By adding the `Just` in all cases,
       -- we're saying that the MaybeCf will defer all control flow questions
@@ -168,34 +159,8 @@ instance ControlFlow MaybeCf Traversable where
           fmap Just $
             CfPutMeIn f $
               fromMaybe (pure mempty) <$> next
-  cfUnrestrict bound bounded ub lb (MaybeCf _ fa) = MaybeCf bound $ unrestrict' bounded ub lb fa
-  cfRaise (MaybeCf bound fa) = MaybeCf bound $ raise fa
-  cfRaiseUnder (MaybeCf bound fa) = MaybeCf bound $ raiseUnder fa
-  cfRun _ handler (MaybeCf (Implies imply) fa) = imply \(Iso lr rl) -> MaybeCf (Implies imply) $ fmap rl . sequenceA . lr <$> handler fa
-
-instance ControlFlow NothingCf Anything where
-  NothingCf fmab `cfApply` _ = NothingCf fmab
-  NothingCf fma `cfBind` _ = NothingCf fma
-  cfOnce @_ @_ @eff _ member' _ handler (NothingCf f) = NothingCf do
-    matchOn f >>= \case
-      Pure () -> runNothingCf $ handler implying member' $ NothingCf $ pure ()
-      Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $
-          fmap getConst $
-            CfPutMeIn (fmap Const . runNothingCf . handler implying member' . NothingCf @eff . void) $
-              fmap (\() -> pure $ Const ()) next
-  cfPutMeIn _ f (NothingCf fin) = NothingCf do
-    matchOn fin >>= \case
-      Pure a -> void $ f $ pure a $> mempty
-      Impure eff lb ub lifter next -> Eff \_ ->
-        Impure eff lb ub lifter $
-          void $
-            CfPutMeIn f $
-              fmap (\() -> pure mempty) next
-  cfUnrestrict _ bounded ub lb (NothingCf fin) = NothingCf $ unrestrict' bounded ub lb fin
-  cfRaise (NothingCf fin) = NothingCf $ raise fin
-  cfRaiseUnder (NothingCf fin) = NothingCf $ raiseUnder fin
-  cfRun _ handler (NothingCf fin) = NothingCf $ void $ handler fin
-
-newtype ComposeCfs eff cf f a = Composed {runComposed :: f ()}
-  deriving (Functor)
+  CfUnrestrict bounded ub lb cf -> unrestrict' bounded ub lb $ runMaybeCf (transImply lb lbIsTrav) go cf
+  CfRaise cf -> raise $ runMaybeCf lbIsTrav go cf
+  CfRaiseUnder cf -> raiseUnder $ runMaybeCf lbIsTrav go cf
+  CfRun handler cf -> lbIsTrav `impliesThat` \(Iso lr rl) -> fmap rl . sequenceA . lr <$> handler (runMaybeCf lbIsTrav go cf)
+  CfInterpose handler cf -> lbIsTrav `impliesThat` \(Iso lr rl) -> fmap rl . sequenceA . lr <$> handler (runMaybeCf lbIsTrav go cf)

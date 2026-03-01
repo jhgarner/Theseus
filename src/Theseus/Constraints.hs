@@ -76,10 +76,11 @@ data stronger `Implies` weaker where
   -- (`Bind` from the semigroupoids package), but you need the `WrappedMonad`
   -- newtype to show that because base Haskell can't depend on semigroupoids.
   Implies ::
-    ( forall f a.
-      stronger f =>
-      (forall g. weaker g => f `Iso` g -> a) -> a
-    ) ->
+    { impliesThat ::
+        forall f a.
+        stronger f =>
+        (forall g. weaker g => f `Iso` g -> a) -> a
+    } ->
     stronger `Implies` weaker
 
 -- | Constraints imply themselves

@@ -9,9 +9,7 @@ module Theseus.Eff (
   effUn,
   matchOn,
   Facts (Facts, bounded),
-  ControlFlow (..),
   CF (..),
-  evalCf,
   Anything,
   Nonthing,
   Implies (..),
@@ -37,6 +35,9 @@ module Theseus.Eff (
   (:>) (getProof),
   IsMember (..),
   withProof,
+  dig,
+  digUnder,
+  runLinearCf,
   (:>>),
 
   -- * Handling Effects
@@ -56,7 +57,6 @@ module Theseus.Eff (
   interpretRaw,
   IHandlerRaw,
   interposeRaw,
-  IdentityCf (IdentityCf, runIdentityCf),
 
   -- * Reexports
   Identity,

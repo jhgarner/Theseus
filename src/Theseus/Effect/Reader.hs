@@ -4,7 +4,6 @@ module Theseus.Effect.Reader (
   local,
   asks,
   runReader,
-  runReaderNoLocal,
 ) where
 
 import Theseus.Eff
@@ -18,7 +17,10 @@ import Theseus.Eff
 -- They cannot change the `r`, but that does not necessarily mean that two
 -- calls to `ask` will never return different `r`s. For example, if a call to
 -- `yield` happens between the asks, the implementation might be switched out
--- for another.
+-- for another. The following laws should hold:
+--
+-- * `a <- ask; b <- ask; pure (a, b)` === `a <- ask; pure (a, a)`
+-- * `local f ask` === `fmap f ask`
 data Reader r m a where
   Ask :: Reader r m r
   -- Local is a provider for Readers. It seems like many higher order effects
@@ -56,16 +58,3 @@ localReader :: forall r lb ub es a. (lb Identity, Reader r :> es) => (r -> r) ->
 localReader f = interpret \sender -> \case
   Ask -> pure . f <$> ask
   Local newF m -> pure $ sender @(Reader r) $ localReader (newF . f) m
-
--- | This is a version of Reader which completely ignores the function passed
--- to local. It's pointless and you should never use it, but it's convenient
--- for some `Coroutine` tests.
-runReaderNoLocal :: lb Identity => r -> Eff lb ub (Reader r : es) a -> Eff lb ub es a
-runReaderNoLocal @_ @r r = interpret \sender -> \case
-  Ask -> pure $ pure r
-  Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)
-
-locallyRunReaderNoLocal :: (Reader r :> es, lb Identity) => Eff lb ub (Reader r : es) a -> Eff lb ub es a
-locallyRunReaderNoLocal @r = interpret \sender -> \case
-  Ask -> pure <$> ask
-  Local _ m -> pure (sender @(Reader r) $ locallyRunReaderNoLocal m)
