@@ -1,7 +1,10 @@
 module Reader where
 
 import Control.Applicative
+import Theseus.Constraints
 import Theseus.Eff
+import Theseus.Effect.Choice
+import Theseus.Effect.Error
 import Theseus.Effect.Reader
 import Utils
 
@@ -56,12 +59,32 @@ testReader = do
             third <- local (++ " never") ask
             pure (first, second, third)
           runReaderNoLocal "second" $ doneCoroutine rest
+  describe "DReader" do
+    describe "Local" do
+      it "is dynamically scoped" do
+        "local" === runEff $ runDReader "initial" $ runDA $ dlocal (const "local") $ send A
+      it "is limited to its scope" do
+        "initial" === runEff $ runDReader "initial" $ runDA $ dlocal (const "local") (pure ()) >> send A
+      it "handles throw" do
+        "initial" === runEff $ runDReader "initial" $ runDA $ do
+          -- Without the `finally` in the implementation, this would forget to pop
+          _ <- runThrow @() $ dlocal (const "local") (throw ())
+          send A
+      it "handles choice" do
+        "initial" === runEff $ runDReader "initial" $ runDA $ do
+          _ <- unrestrict @Traversable @Traversable idImply $ runChoice $ dlocal (const "local") do
+            -- Without the `finally` in the implementation, this would try to pop twice
+            pure () <|> pure ()
+          send A
 
 data A :: Effect where
   A :: A m String
 
 runA :: (Reader String :> es, lb Identity) => Eff lb ub (A : es) a -> Eff lb ub es a
 runA = interpret_ \A -> ask
+
+runDA :: (DReader String :> es, lb Identity) => Eff lb ub (A : es) a -> Eff lb ub es a
+runDA = interpret_ \A -> dask
 
 -- | This is a version of Reader which completely ignores the function passed
 -- to local. It's unlawful and you should never use it, but it's convenient
